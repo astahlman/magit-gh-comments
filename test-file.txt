@@ -35,11 +35,10 @@ And here's a new line on what is now line 6
 38.
 39.
 40.
-41.
+41. I'm going to delete line 45...
 42.
 43.
 44.
-45.
 46.
 47.
 48.
