@@ -1,3 +1,5 @@
+;; -*- lexical-binding: t -*-
+
 (require 'ert)
 
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
@@ -256,5 +258,14 @@ Github-style position."
     (should (string= expected-line-contents
                      (magit-gh--line-contents-at-github-pos github-diff-pos
                                                             magit-diff-buf)))))
-(ert "test-magit-gh--.*")
+(defun magit-gh-add-comment (comment-text)
+  (interactive "MComment:")
+  (let* ((magit-pos (magit-gh--cur-diff-pos))
+         (github-pos (magit-gh--translate-diff-pos magit-pos))
+         (commit-sha (magit-diff-visit--range-end)))
+    (magit-gh--post-pr-comment magit-gh-comment-test-pr
+                               commit-sha
+                               github-pos
+                               comment-text)))
 
+(ert "test-magit-gh--.*")
