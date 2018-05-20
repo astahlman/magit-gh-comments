@@ -2,6 +2,8 @@
 
 (require 'ert)
 
+(require 'magit-gh-comments-github)
+
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
 (defun magit-gh--cur-diff-pos ()
@@ -150,12 +152,20 @@ lines in the hunk that precede POS."
     (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :b 2)))
     (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :a 3)))))
 
-(defun magit-gh--translate-diff-pos (pos)
+
+(defun magit-gh--translate-diff-pos (pos &optional diff-body)
   "Given magit diff position POS, calculate the corresponding
 Github-style position."
-  (let* ((lines (split-string (buffer-string) "\n" t))
-         (lines-partitioned-by-hunk-header (cdr ;; discard lines before first hunk header
-                                            (magit-gh--partition-by lines 'magit-gh--try-parse-hunk-header)))
+  (let* ((lines (split-string
+                 (or diff-body
+                     (buffer-substring-no-properties (point-min) (point-max)))
+                 "\n" t))
+         (lines (seq-drop-while
+                 ;; discard everything before the first hunk header
+                 (lambda (x) (not (magit-gh--try-parse-hunk-header x)))
+                 lines))
+         (lines-partitioned-by-hunk-header
+          (magit-gh--partition-by lines 'magit-gh--try-parse-hunk-header))
          (hunks (magit-gh--pair-and-merge lines-partitioned-by-hunk-header))
          (hunks-not-after-target (seq-take-while
                                   (lambda (hunk)
@@ -166,8 +176,8 @@ Github-style position."
                                                                   header)))
                                       (<= hunk-start (magit-gh-diff-pos-hunk-start pos))))
                                   hunks))
-         (is-valid (assert hunks-not-after-target t
-                           (format "Could not find a line at diff position [%s]. Last hunk: [%s]"
+         (is-valid (if (not hunks-not-after-target)
+                       (user-error "Could not find a line at diff position [%s]. Last hunk: [%s]"
                                    pos
                                    (caar (last hunks-not-after-target)))))
          (gh-pos-hunk-start (reduce '+ (mapcar #'length (butlast hunks-not-after-target))))
@@ -176,96 +186,26 @@ Github-style position."
     (+ gh-pos-hunk-start
        gh-hunk-offset)))
 
-(defun magit-gh--gen-random-string (str-len)
-  (let ((gen-random-char (lambda (n) (+ ?a (random 26)))))
-    (apply #'string (mapcar gen-random-char (number-sequence 1 str-len)))))
 
-(defun magit-gh--gen-random-file (&optional num-lines)
-  (with-temp-buffer
-    (dotimes (i (or num-lines 50))
-      (insert (format "%s) %s\n" (+ 1 i) (magit-gh--gen-random-string 8))))
-    (buffer-substring (point-min) (1- (point-max)))))
+(defun magit-gh--current-section-content ()
+  "Return the contents of the magit section at point as a string"
+  (interactive)
+  (buffer-substring-no-properties
+   (magit-section-start (magit-current-section))
+   (magit-section-end (magit-current-section))))
 
 
-(defun magit-gh--mutate-file (contents &optional mutation-rate)
-  (with-temp-buffer
-    (let ((i 0))
-      (dolist (line (split-string contents "\n"))
-        (setq i (1+ i))
-        (let ((maybe-mutated-line (if (<= (random 100) (* 100 (or mutation-rate .2)))
-                                      (pcase (random 2)
-                                        (0 nil) ;; delete it
-                                        (1 (format "%s) %s" i (magit-gh--gen-random-string 8)))) ;; mutate it
-                                    line)))
-          (when maybe-mutated-line
-            (insert maybe-mutated-line "\n")))))
-    (buffer-substring (point-min) (1- (point-max)))))
-
-
-(defun magit-gh--generate-revisions ()
-  "Make a file with random contents, then mutate it"
-  (let* ((num-lines 50)
-         (mutation-rate .2)
-         (rev-a (magit-gh--gen-random-file num-lines))
-         (rev-b (magit-gh--mutate-file rev-a mutation-rate)))
-    (with-temp-file "/tmp/a.txt" (insert rev-a))
-    (with-temp-file "/tmp/b.txt" (insert rev-b))
-    '("/tmp/a.txt" . "/tmp/b.txt")))
-
-
-(defun magit-gh--generate-github-diff ()
-  (let ((buf-name "*magit-gh-github-diff*")
-        (num-context-lines (number-to-string (+ 3 (random 5)))))
-    (when (get-buffer buf-name)
-      (kill-buffer buf-name))
-    (call-process "git" nil buf-name nil "--no-pager" "diff" "-U" num-context-lines "--no-index" "/tmp/a.txt" "/tmp/b.txt")
-    buf-name))
-
-(defun magit-gh--generate-magit-diff (rev-a-file rev-b-file)
-  (let ((buf-name "*magit-gh-magit-diff*"))
-    (when (get-buffer buf-name)
-      (kill-buffer buf-name))
-    (call-process "git" nil buf-name nil "--no-pager" "diff" "--no-index" rev-a-file rev-b-file)
-    buf-name))
-
-
-(defun magit-gh--pick-random-line-in-diff (diff-buf)
-  (let (num-changes)
-    (with-current-buffer diff-buf
-      (goto-char (point-min))
-      (re-search-forward "@@ -[0-9]+,[0-9]+ \\+[0-9]+,[0-9]+ @@")
-      (setq num-changes (how-many "^[-\\+]"))
-      (re-search-forward "^[-\\+]\\(.+\\)" nil nil (1+ (random num-changes)))
-      `((:line-contents . ,(match-string 1))
-        (:diff-pos . ,(magit-gh--cur-diff-pos))))))
-
-(defun magit-gh--line-contents-at-github-pos (n diff-buf)
-  (with-current-buffer diff-buf
-    (goto-char (point-min))
-    (while (and (not (magit-gh--try-parse-hunk-header))
-                (= 0 (forward-line))))
-    (forward-line n)
-    (buffer-substring (1+ (point-at-bol)) (point-at-eol))))
-
-(ert-deftest test-magit-gh--translate-diff-pos ()
-  (let* ((rev-files (magit-gh--generate-revisions))
-         (magit-diff-buf (magit-gh--generate-magit-diff (car rev-files) (cdr rev-files)))
-         (random-line-in-diff (magit-gh--pick-random-line-in-diff magit-diff-buf)) ;; TODO: This is a terrible var name
-         (diff-pos (alist-get :diff-pos random-line-in-diff))
-         (expected-line-contents (alist-get :line-contents random-line-in-diff))
-         (github-diff-pos (with-current-buffer magit-diff-buf
-                            (magit-gh--translate-diff-pos diff-pos))))
-    (should (string= expected-line-contents
-                     (magit-gh--line-contents-at-github-pos github-diff-pos
-                                                            magit-diff-buf)))))
 (defun magit-gh-add-comment (comment-text)
-  (interactive "MComment:")
-  (let* ((magit-pos (magit-gh--cur-diff-pos))
-         (github-pos (magit-gh--translate-diff-pos magit-pos))
+  "Comment on the line at point and post the comment to Github"
+  (interactive "MComment: ")
+  (let* ((lines (split-string (magit-gh--current-section-content) "\n" t))
+         (magit-pos (magit-gh--cur-diff-pos))
+         (github-pos (magit-gh--translate-diff-pos magit-pos (magit-gh--current-section-content)))
          (commit-sha (magit-diff-visit--range-end)))
     (magit-gh--post-pr-comment magit-gh-comment-test-pr
+                               (magit-current-file)
                                commit-sha
                                github-pos
                                comment-text)))
 
-(ert "test-magit-gh--.*")
+(provide 'magit-gh-comments)
