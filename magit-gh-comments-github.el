@@ -1,4 +1,4 @@
-; -*- lexical-binding: t -*-
+;; -*- lexical-binding: t -*-
 
 (require 'request)
 (require 'magit-git)
