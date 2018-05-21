@@ -38,19 +38,19 @@
                                                  :repo-name "magit-gh-comments"
                                                  :pr-number 2))
 
-(defun magit-gh--comment-as-json (commit-sha gh-pos comment-text &optional  filename)
-  (let ((filename (or filename "test-file.txt")))
-    (json-encode `((:body . ,comment-text)
-                   (:commit_id . ,commit-sha) ;; TODO: stop hardcoding
-                   (:path . ,filename) ;; TODO: stop hardcoding
-                   (:position . ,gh-pos)))))
+(defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text)
+  (json-encode `((:body . ,comment-text)
+                 (:commit_id . ,commit-sha)
+                 (:path . ,filename)
+                 (:position . ,gh-pos))))
 
-(magit-gh--comment-as-json "562b1f07ede9c579ae5ec2d79a07879dd7a0d031" 7 "hi")
+(magit-gh--comment-as-json "test-file.txt" "562b1f07ede9c579ae5ec2d79a07879dd7a0d031" 7 "hi")
 (magit-gh--fetch-diff-from-github magit-gh-comment-test-pr (get-buffer-create "pr-2-diffs"))
 
-(defun magit-gh--post-pr-comment (pr commit-id gh-pos comment-text)
+(defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text)
   (let ((url (magit-gh--url-for-pr-comments pr))
-        (json-payload (magit-gh--comment-as-json commit-id
+        (json-payload (magit-gh--comment-as-json filename
+                                                 commit-id
                                                  gh-pos
                                                  comment-text)))
     (request
@@ -64,7 +64,7 @@
                (write-file "/tmp/response.txt"))
      :complete (function*
              (lambda (&key response &allow-other-keys)
-               (if (not (= 200 (request-response-status-code response)))
+               (if (not (member (request-response-status-code response) '(200 201)))
                    (error "Failed to post comment to %s" url)))))))
 
 
@@ -76,7 +76,7 @@
      :parser (lambda ()
                (write-file "/tmp/response2.txt")))))
 
-;;(magit-gh--list-comments magit-gh-comment-test-pr)
-;;(magit-gh--post-pr-comment magit-gh-comment-test-pr 1 "This comment came from gh-comments.")
 (setq request-message-level 'debug)
 (setq request-log-level 'debug)
+
+(provide 'magit-gh-comments-github)
