@@ -1,5 +1,8 @@
 This isn't anything yet. Go away.
 
+Here's a proposed revision to the README. What does everyone think
+about it?
+
 * Subproblems
 ** Adding comments with annotate
 ** Pushing/pulling comments via the Github API
