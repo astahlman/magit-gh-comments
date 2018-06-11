@@ -3,7 +3,15 @@
 (require 'request)
 (require 'magit-git)
 
+(defconst MAGIT-GH-DEBUG t)
 (defstruct magit-gh-pr owner repo-name pr-number)
+
+(setq request-message-level 'debug)
+(setq request-log-level 'debug)
+
+(setq magit-gh-comment-test-pr (make-magit-gh-pr :owner "astahlman"
+                                                 :repo-name "magit-gh-comments"
+                                                 :pr-number 3))
 
 (defun magit-gh--get-oauth-token ()
   (let ((token (magit-get "github" "oauth-token")))
@@ -20,32 +28,28 @@
 (defun magit-gh--url-for-pr-comments (pr)
   (format "%s/comments" (magit-gh--url-for-pr pr)))
 
-(defun magit-gh--fetch-diff-from-github (pr target-buf)
-  (request
-   (magit-gh--url-for-pr pr)
-   :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
-              ("Accept" . "application/vnd.github.v3.diff"))
-   :parser (lambda ()
-             (let ((diff-content (buffer-substring (point-min) (point-max))))
-               (with-current-buffer target-buf
-                 (goto-char (point-min))
-                 (insert diff-content))))
-   :error (function*
-           (lambda (&key error-thrown &allow-other-keys)
-             (error "Failed to fetch diff from Github: %s" error-thrown)))))
-
-(setq magit-gh-comment-test-pr (make-magit-gh-pr :owner "astahlman"
-                                                 :repo-name "magit-gh-comments"
-                                                 :pr-number 2))
+(defun magit-gh--fetch-diff-from-github (pr)
+  (if MAGIT-GH-DEBUG
+      magit-gh--cached-diff
+      (let ((result))
+        (request
+         (magit-gh--url-for-pr pr)
+         :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
+                    ("Accept" . "application/vnd.github.v3.diff"))
+         :parser (lambda ()
+                   (setq result (buffer-string)))
+         :sync t
+         :error (function*
+                 (lambda (&key error-thrown &allow-other-keys)
+                   (error "Failed to fetch diff from Github: %s" error-thrown))))
+        (setq magit-gh--cached-diff result)
+        result)))
 
 (defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text)
   (json-encode `((:body . ,comment-text)
                  (:commit_id . ,commit-sha)
                  (:path . ,filename)
                  (:position . ,gh-pos))))
-
-(magit-gh--comment-as-json "test-file.txt" "562b1f07ede9c579ae5ec2d79a07879dd7a0d031" 7 "hi")
-(magit-gh--fetch-diff-from-github magit-gh-comment-test-pr (get-buffer-create "pr-2-diffs"))
 
 (defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text)
   (let ((url (magit-gh--url-for-pr-comments pr))
@@ -67,16 +71,54 @@
                (if (not (member (request-response-status-code response) '(200 201)))
                    (error "Failed to post comment to %s" url)))))))
 
-
 (defun magit-gh--list-comments (pr)
-  (let ((url (magit-gh--url-for-pr-comments pr)))
-    (request
-     url
-     :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
-     :parser (lambda ()
-               (write-file "/tmp/response2.txt")))))
+  "Return a list of comments that aren't outdated for the given
+PR. A comment is outdated if its position is null, according to
+Github. Each element of the result is an alist with the following keys:
 
-(setq request-message-level 'debug)
-(setq request-log-level 'debug)
+:body - The text of the comment
+:position - The comment's Github-style position in the diff
+:author - The Github username of the comments' author
+:path - The path to the file to which this comment applies"
+  (let ((comment-fields '(body position author path))
+        (url (magit-gh--url-for-pr-comments pr))
+        (alist-filter (lambda (keys alist)
+                        (filter 'identity ;; remove nils
+                                (mapcar (lambda (k)
+                                          (assoc k alist))
+                                        keys))))
+        (outdated-p (lambda (comment) (not (alist-get 'position comment))))
+        (alist-map-keys (lambda (fn alist)
+                          (let ((result))
+                            (reverse
+                             (dolist (cell alist result)
+                               (setq result
+                                     (cons
+                                      (cons (funcall fn (car cell))
+                                            (cdr cell))
+                                      result)))))))
+        (sym-to-keyword (lambda (x) (intern (format ":%s" x))))
+        (result))
+    (progn
+      (if MAGIT-GH-DEBUG
+          (setq result magit-gh--cached-comments)
+        (request
+         url
+         :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
+         :parser (lambda ()
+                   (let ((json-array-type 'list))
+                     (json-read-array)))
+         :sync t
+         :success) (cl-function
+                    (lambda (&key data &allow-other-keys)
+                      (dolist (comment (remove-if outdated-p data))
+                        (setq result
+                              (cons (funcall alist-filter
+                                             comment-fields
+                                             comment)
+                                    result))
+                        (setq magit-gh--cached-comments result)))))
+      (mapcar (lambda (l) (funcall alist-map-keys sym-to-keyword l))
+              (reverse result)))))
 
 (provide 'magit-gh-comments-github)

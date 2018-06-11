@@ -5,6 +5,7 @@
 (require 'magit-gh-comments-github)
 
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
+(defstruct magit-gh-comment file diff-pos text)
 
 (defun magit-gh--cur-diff-pos ()
   "Calculate the position of point within a magit diff and return
@@ -40,6 +41,40 @@ a magit-gh-diff-pos."
       (make-magit-gh-diff-pos :a-or-b (if is-looking-at-rev-a :a :b)
                               :hunk-start hunk-start
                               :offset offset))))
+
+(defun foo () (interactive) (magit-section-forward))
+(defun magit-gh--visit-diff-pos (file pos)
+  "Put point on the beginning of the line corresponding to
+magit-gh-diff-pos POS."
+  (goto-char (point-min))
+  (if-let ((file-section (car (-filter
+                               (lambda (sec) (and (magit-file-section-p sec)
+                                                  (string= (magit-section-value sec)
+                                                           file)))
+                               (oref magit-root-section children)))))
+      ;; TODO: Use magit-next-section or some such thing
+      (magit-section-goto file-section))
+  ;; (re-search-forward (format "+++ b/%s" file)) ;; TODO: What about files that have been renamed?
+  (let ((found-p nil))
+    (while (not found-p)
+      (forward-line)
+      (-if-let* ((hunk-header (magit-gh--try-parse-hunk-header))
+                 (rev (magit-gh-diff-pos-a-or-b pos))
+                 (start (alist-get (if (eq :a rev) :a-start :b-start)
+                                   hunk-header))
+                 (len (alist-get (if (eq :a rev) :a-len :b-len)
+                                 hunk-header))
+                 (target (+ (magit-gh-diff-pos-offset pos)
+                            (magit-gh-diff-pos-hunk-start pos)))
+                 (i 0))
+          (when (and (>= target start)
+                     (<= target (+ start len)))
+            (while (<= (+ start i) target)
+              (assert (= 0 (forward-line)))
+              (unless (looking-at
+                 (format "^%s" (if (eq :a rev) "\\+" "-")))
+                (cl-incf i)))
+            (setq found-p t))))))
 
 (defun magit-gh--try-parse-hunk-header (&optional line)
   "Read the current line as a hunk-header. Return nil if the line
@@ -153,13 +188,11 @@ lines in the hunk that precede POS."
     (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :a 3)))))
 
 
-(defun magit-gh--translate-diff-pos (pos &optional diff-body)
-  "Given magit diff position POS, calculate the corresponding
-Github-style position."
-  (let* ((lines (split-string
-                 (or diff-body
-                     (buffer-substring-no-properties (point-min) (point-max)))
-                 "\n" t))
+(defun magit-gh--diff-pos/magit->gh (pos diff-body)
+  "Given magit diff position POS and a DIFF-BODY (of type
+application/vnd.github.v3.diff, from Github), calculate the
+corresponding Github-style position."
+  (let* ((lines (split-string diff-body "\n" t))
          (lines (seq-drop-while
                  ;; discard everything before the first hunk header
                  (lambda (x) (not (magit-gh--try-parse-hunk-header x)))
@@ -187,6 +220,19 @@ Github-style position."
        gh-hunk-offset)))
 
 
+(defun magit-gh--diff-pos/gh->magit (file gh-pos gh-diff-body)
+  "Given a FILE and a Github-style diff position GH-POS in
+GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
+  (with-temp-buffer
+    (save-excursion
+      (insert gh-diff-body)
+      (goto-char (point-min))
+      (re-search-forward (format "+++ b/%s" file))
+      (re-search-forward "@@ -\\([0-9]+\\),\\([0-9]+\\) \\+\\([0-9]+\\),\\([0-9]+\\) @@")
+      (forward-line gh-pos)
+      (magit-gh--cur-diff-pos))))
+
+
 (defun magit-gh--current-section-content ()
   "Return the contents of the magit section at point as a string"
   (interactive)
@@ -199,13 +245,108 @@ Github-style position."
   "Comment on the line at point and post the comment to Github"
   (interactive "MComment: ")
   (let* ((lines (split-string (magit-gh--current-section-content) "\n" t))
-         (magit-pos (magit-gh--cur-diff-pos))
-         (github-pos (magit-gh--translate-diff-pos magit-pos (magit-gh--current-section-content)))
-         (commit-sha (magit-diff-visit--range-end)))
-    (magit-gh--post-pr-comment magit-gh-comment-test-pr
+         (magit-pos (magit-gh--cur-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
+         (diff-body (magit-gh--current-section-content))  ;; TODO: This should by the *github* diff, not the magit diff!
+         (github-pos (magit-gh--diff-pos/magit->gh magit-pos diff-body))
+         (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
+    (magit-gh--post-pr-comment (magit-gh--get-current-pr)
                                (magit-current-file)
                                commit-sha
                                github-pos
                                comment-text)))
 
+;; (setq magit-gh-test-pr-comments (magit-gh--list-comments magit-gh-comment-test-pr))
+;; (setq magit-gh-test-pr-diff-body (with-current-buffer "pr-2-diffs" (buffer-substring-no-properties (point-min) (point-max))))
+;; (setq magit-gh-sample-diff-pos
+;;       (magit-gh--diff-pos/gh->magit "magit-gh-comments-github.el" 5
+;;                                     (with-current-buffer  "pr-2-diffs"
+;;                                       (buffer-substring-no-properties (point-min) (point-max)))))
+
+;; TODO: Make nice customizable faces
+(defgroup magit-gh-comments nil
+  "Add comments to Github Pull Requests from magit"
+  :group 'code)
+
+(defun magit-gh--format-comment-body (s &optional fill-width)
+  (with-temp-buffer
+    (insert s)
+    (let ((fill-column (or fill-width 80)))
+      (fill-region (point-min) (point-max)))
+    (goto-char (point-min))
+    (while (re-search-forward "^" nil t)
+      (replace-match ">>> "))
+    (buffer-substring-no-properties (point-min) (point-max))))
+
+(defun magit-gh--propertize-overlay-text (s)
+  (propertize (concat (magit-gh--format-comment-body s) "\n")
+              'face 'magit-blame-highlight ;; TODO: Change this)
+              ))
+
+(defun magit-gh--display-comments (comments gh-diff-body)
+  (save-excursion
+    (dolist (comment comments)
+      (let ((magit-pos (magit-gh--diff-pos/gh->magit (alist-get :path comment)
+                                                     (alist-get :position comment)
+                                                     gh-diff-body))
+            (ov))
+        (magit-gh--visit-diff-pos (alist-get :path comment) magit-pos)
+        (setq ov (make-overlay (point-at-bol) (1+ (point-at-eol))))
+        (overlay-put ov 'magit-gh-comment comment)
+        (overlay-put ov 'face 'underline)
+        (overlay-put ov 'after-string (magit-gh--propertize-overlay-text
+                                       (alist-get :body comment)))))))
+
+(defun magit-gh--delete-comment-overlays ()
+  "Delete all comment overlays in the current buffer"
+  (interactive)
+  (let ((overlays (filter (lambda (ov) (overlay-get ov 'magit-gh-comment))
+                          (overlays-in (point-min) (point-max)))))
+    (dolist (overlay overlays)
+      (delete-overlay overlay))))
+
+(defun magit-gh-refresh-comments ()
+  "Refresh the comments for the current PR"
+  (interactive)
+  (magit-gh--delete-comment-overlays)
+  (-if-let* ((current-pr (magit-gh--get-current-pr))
+             (comments (magit-gh--list-comments current-pr))
+             (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
+      (magit-gh--display-comments comments gh-diff)
+    (error "Couldn't fetch the PR associated with this diff! (This is likely a bug)")))
+
+
+;;; Capture and store the associated PR when the user views its diff
+;;; from the magit Pull Requests section
+(define-advice magit-gh-pulls-diff-pull-request (:around (original-fn) capture-current-pull-request)
+  (let ((section-val (magit-section-value (magit-current-section))))
+    (funcall original-fn)
+    (destructuring-bind (user proj id) section-val
+      (setq-local magit-gh--current-pr (make-magit-gh-pr :owner user
+                                                         :repo-name proj
+                                                         :pr-number id)))))
+
+(defun magit-gh--get-current-pr ()
+  "Return the Pull Request object which the user is currently
+viewing"
+  (and (boundp 'magit-gh--current-pr)
+       magit-gh--current-pr))
+
 (provide 'magit-gh-comments)
+
+;;; BEGIN - Debugging utilities - delete me
+
+(defun overlays-at-point ()
+  "Return overlays which touch point, with inclusive start and
+end"
+  (interactive)
+  (filter (lambda (ov) (and (>= (point) (overlay-start ov))
+                            (<= (point) (overlay-end ov))))
+          (-flatten (overlay-lists))))
+
+
+(defun delete-overlays-at-point ()
+  (interactive)
+  (dolist (ov (overlays-at-point))
+    (delete-overlay ov)))
+
+;;; END - Debugging utilities - delete me

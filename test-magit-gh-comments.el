@@ -75,16 +75,16 @@
     (forward-line n)
     (buffer-substring (1+ (point-at-bol)) (point-at-eol))))
 
-(ert-deftest test-magit-gh--translate-diff-pos ()
+(ert-deftest test-magit-gh--diff-pos/magit->gh ()
   (let* ((rev-files (magit-gh--generate-revisions))
          (magit-diff-buf (magit-gh--generate-magit-diff (car rev-files) (cdr rev-files)))
          (random-line-in-diff (magit-gh--pick-random-line-in-diff magit-diff-buf)) ;; TODO: This is a terrible var name
          (diff-pos (alist-get :diff-pos random-line-in-diff))
          (expected-line-contents (alist-get :line-contents random-line-in-diff))
-         (github-diff-pos (with-current-buffer magit-diff-buf
-                            (magit-gh--translate-diff-pos diff-pos))))
+         (magit-diff-body (with-current-buffer magit-diff-buf (buffer-substring (point-min) (point-max))))
+         (github-diff-pos (magit-gh--diff-pos/magit->gh diff-pos magit-diff-body))
     (should (string= expected-line-contents
                      (magit-gh--line-contents-at-github-pos github-diff-pos
-                                                            magit-diff-buf)))))
+                                                            magit-diff-buf))))))
 
 (ert "test-magit-gh--.*")
