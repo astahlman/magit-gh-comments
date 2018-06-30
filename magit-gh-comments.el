@@ -36,8 +36,6 @@
 (require 'ert)
 (require 'magit-gh-comments-github)
 
-;;; Code:
-
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 (defstruct magit-gh-comment file diff-pos text)
 
@@ -376,8 +374,8 @@ which they came, add them to current magit-diff buffer."
     (error "Couldn't fetch the PR associated with this diff! (This is likely a bug)")))
 
 
-;;; Capture and store the associated PR when the user views its diff
-;;; from the magit Pull Requests section
+;; Capture and store the associated PR when the user views its diff
+;; from the magit Pull Requests section
 (define-advice magit-gh-pulls-diff-pull-request (:around (original-fn) capture-current-pull-request)
   (let ((section-val (magit-section-value (magit-current-section))))
     (funcall original-fn)
