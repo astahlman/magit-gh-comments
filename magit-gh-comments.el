@@ -1,84 +1,78 @@
 ;; -*- lexical-binding: t -*-
 
 (require 'ert)
-
 (require 'magit-gh-comments-github)
+
+;;; Code:
 
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 (defstruct magit-gh-comment file diff-pos text)
 
+
 (defun magit-gh--cur-diff-pos ()
-  "Calculate the position of point within a magit diff and return
-a magit-gh-diff-pos."
-  (interactive)
-  (save-excursion
-    (re-search-backward "^@\\{2,\\} \\(.+?\\) @\\{2,\\}\\(?: \\(.*\\)\\)?"))
-  (let* ((heading (match-string 0))
-         (irrelevant-section-heading (match-string 2))
-         (hunk-ranges (split-string (match-string 1)))
-         (rev-a-range (car hunk-ranges))
-         (rev-b-range (cadr hunk-ranges))
+  "Return the current, magit-style, position in the diff."
+  (let* ((hunk-header (magit-gh--try-parse-hunk-header2)) ;; TODO: How will this handle new files?
+         (rev (save-excursion (goto-char (line-beginning-position))
+                              (if (looking-at "^-") :a :b)))
+         (hunk-start (alist-get (if (eq :a rev) :a-start :b-start) hunk-header))
          (target-line (line-number-at-pos))
-         (offset 0)
-         (is-looking-at-rev-a  (and rev-a-range rev-b-range
-                                    (save-excursion (goto-char (line-beginning-position))
-                                                    (looking-at "^-"))))
-         (rev-range (if is-looking-at-rev-a
-                        rev-a-range
-                      rev-b-range))
-         (hunk-start (progn
-                       (string-match (format "^%s\\([0-9]+\\)" (if is-looking-at-rev-a "-" "\\+")) rev-range)
-                       (string-to-number (match-string 1 rev-range)))))
+         (offset 0))
     (save-excursion
-      (re-search-backward "^@\\{2,\\} \\(.+?\\) @\\{2,\\}\\(?: \\(.*\\)\\)?")
-      (forward-line)
-      (beginning-of-line)
+      (magit-section-backward)
       (while (< (line-number-at-pos) target-line)
         (unless (looking-at
-                 (format "^%s" (if is-looking-at-rev-a "\\+" "-")))
+                 (format "^%s" (if (eq rev :a) "\\+" "-")))
           (cl-incf offset))
         (assert (= 0 (forward-line))))
-      (make-magit-gh-diff-pos :a-or-b (if is-looking-at-rev-a :a :b)
+      (make-magit-gh-diff-pos :a-or-b (if (eq :a rev) :a :b)
                               :hunk-start hunk-start
                               :offset offset))))
 
-(defun foo () (interactive) (magit-section-forward))
+
 (defun magit-gh--visit-diff-pos (file pos)
-  "Put point on the beginning of the line corresponding to
-magit-gh-diff-pos POS."
-  (goto-char (point-min))
-  (if-let ((file-section (car (-filter
-                               (lambda (sec) (and (magit-file-section-p sec)
-                                                  (string= (magit-section-value sec)
-                                                           file)))
-                               (oref magit-root-section children)))))
-      ;; TODO: Use magit-next-section or some such thing
-      (magit-section-goto file-section))
-  ;; (re-search-forward (format "+++ b/%s" file)) ;; TODO: What about files that have been renamed?
-  (let ((found-p nil))
-    (while (not found-p)
-      (forward-line)
-      (-if-let* ((hunk-header (magit-gh--try-parse-hunk-header))
-                 (rev (magit-gh-diff-pos-a-or-b pos))
-                 (start (alist-get (if (eq :a rev) :a-start :b-start)
-                                   hunk-header))
-                 (len (alist-get (if (eq :a rev) :a-len :b-len)
-                                 hunk-header))
-                 (target (+ (magit-gh-diff-pos-offset pos)
-                            (magit-gh-diff-pos-hunk-start pos)))
-                 (i 0))
-          (when (and (>= target start)
-                     (<= target (+ start len)))
-            (while (<= (+ start i) target)
-              (assert (= 0 (forward-line)))
-              (unless (looking-at
-                 (format "^%s" (if (eq :a rev) "\\+" "-")))
-                (cl-incf i)))
-            (setq found-p t))))))
+  "Put point at the given position POS in a magit-diff buffer.
+
+Go to the beginning of the line corresponding to
+magit-gh-diff-pos POS in the section for FILE."
+  (-if-let* ((rev (magit-gh-diff-pos-a-or-b pos))
+             (target (+ (magit-gh-diff-pos-offset pos)
+                        (magit-gh-diff-pos-hunk-start pos)))
+             (file-section (car (-filter
+                                 (lambda (sec) (and (magit-file-section-p sec)
+                                                    (string= (magit-section-value sec)
+                                                             file)))
+                                 (oref magit-root-section children))))
+             (target-in-hunk-p (lambda (hunk-header)
+                                 (let ((start (alist-get (if (eq :a rev) :a-start :b-start)
+                                                         hunk-header))
+                                       (len (alist-get (if (eq :a rev) :a-len :b-len)
+                                                       hunk-header)))
+                                   (and (>= target start)
+                                        (<= target (+ start len))))))
+             (hunk-section (-filter (lambda (section)
+                                      (if-let ((hunk-header (magit-gh--try-parse-hunk-header2 section)))
+                                          (funcall target-in-hunk-p hunk-header)))
+                                    (oref file-section children))))
+      (progn
+        (setq file-sec file-section)
+        (assert (= 1 (length hunk-section)))
+        (magit-section-goto (car hunk-section))
+        (let* ((found-p nil)
+               (i 0)
+               (hunk-header (magit-gh--try-parse-hunk-header2))
+               (start (alist-get (if (eq :a rev) :a-start :b-start)
+                                 hunk-header)))
+          (while (<= (+ start i) target)
+            (assert (= 0 (forward-line)))
+            (unless (looking-at
+                     (format "^%s" (if (eq :a rev) "\\+" "-")))
+              (cl-incf i)))))
+    (error "Could not find a hunk that contains magit-position [%s]" pos)))
 
 (defun magit-gh--try-parse-hunk-header (&optional line)
-  "Read the current line as a hunk-header. Return nil if the line
-at point is not a hunk-header"
+  "Try to parse the current LINE as a hunk-header.
+
+Return nil if the line at point is not a hunk-header."
   (interactive)
   (let ((line (or line (buffer-substring (point-at-bol) (point-at-eol)))))
     (with-temp-buffer
@@ -90,9 +84,23 @@ at point is not a hunk-header"
             (:b-start . ,(string-to-number (match-string 3)))
             (:b-len . ,(string-to-number (match-string 4))))))))
 
+;; TODO: Combine this and the above method
+(defun magit-gh--try-parse-hunk-header2 (&optional section)
+  (let ((section (or section (magit-current-section))))
+    (if (magit-section-match 'hunk section)
+        (cl-destructuring-bind (a b) (cdr (oref section value))
+          (let ((a-range (mapcar #'string-to-number (split-string a ",")))
+                (b-range (mapcar #'string-to-number (split-string b ","))))
+            `((:a-start . ,(* -1 (car a-range))) ;; string starts with a '-'
+              (:a-len . ,(cadr a-range))
+              (:b-start . ,(car b-range))
+              (:b-len . ,(cadr b-range))))))))
+
 (defun magit-gh--partition-by (xs-in fn &optional xs-out)
-  "Apply FN to each value in XS-IN, splitting it each time FN
-returns a new value. Return a list of lists."
+  "Partition XS-IN according to the function FN.
+
+Apply FN to each value in XS-IN, splitting it each time FN
+returns a new value.  Return a list of lists."
   (if (not xs-in)
       (reverse (cons (reverse (car xs-out)) (cdr xs-out)))
     (cond ((not xs-out)
@@ -116,14 +124,14 @@ returns a new value. Return a list of lists."
                  (magit-gh--partition-by '(:a :b :c :d)  (lambda (x) (eq :d x))))))
 
 (defun magit-gh--pair-and-merge (xs-in &optional xs-out)
-  "Pair off adjacent sequences in XS-IN and merge their
-contents. Return a sequence of sequences which is half the length
+  "Pair and merge adjacent sequences in XS-IN.
+
+Return a sequence of sequences which is half the length
 of the original.
 
 Example:
 
-'((:foo) (:bar) (:buzz) (:bop)) -> '((:foo :bar) (:buzz :bop))
-"
+'((:foo) (:bar) (:buzz) (:bop)) -> '((:foo :bar) (:buzz :bop))"
   (assert (evenp (length xs-in)))
   (if (not xs-in)
       (reverse xs-out)
@@ -134,13 +142,14 @@ Example:
                  (magit-gh--pair-and-merge '((1) (2 3 4) (5 6) (7 8))))))
 
 (defun magit-gh--running-sum (xs)
-  "Return a sequence of the same length as XS, where the element
+  "Calculate a running sum of the elements of XS.
+
+Return a sequence of the same length as XS, where the element
 at each index i in the output equals the sum of XS[0..i]
 
 Example:
 
-'(1 2 0) -> '(1 3 3)
-"
+'(1 2 0) -> '(1 3 3)"
   (reverse
    (let (result)
      (dolist (x xs result)
@@ -154,7 +163,7 @@ Example:
              (car (last (magit-gh--running-sum (number-sequence 1 100)))))))
 
 (defun magit-gh--calc-gh-offset (lines pos)
-  "Given hunk body LINES and magit diff position POS, calculate
+   "Given hunk body LINES and magit diff position POS, calculate
 the (Github-style) position within the hunk as 1 + the number of
 lines in the hunk that precede POS."
   (let* ((magit-offset (magit-gh-diff-pos-offset pos))
@@ -189,7 +198,9 @@ lines in the hunk that precede POS."
 
 
 (defun magit-gh--diff-pos/magit->gh (pos diff-body)
-  "Given magit diff position POS and a DIFF-BODY (of type
+  "Convert a Magit diff position to a Github diff position.
+
+  Given magit diff position POS and a DIFF-BODY (of type
 application/vnd.github.v3.diff, from Github), calculate the
 corresponding Github-style position."
   (let* ((lines (split-string diff-body "\n" t))
@@ -210,7 +221,7 @@ corresponding Github-style position."
                                       (<= hunk-start (magit-gh-diff-pos-hunk-start pos))))
                                   hunks))
          (is-valid (if (not hunks-not-after-target)
-                       (user-error "Could not find a line at diff position [%s]. Last hunk: [%s]"
+                       (user-error "Could not find a line at diff position [%s].  Last hunk: [%s]"
                                    pos
                                    (caar (last hunks-not-after-target)))))
          (gh-pos-hunk-start (reduce '+ (mapcar #'length (butlast hunks-not-after-target))))
@@ -221,8 +232,10 @@ corresponding Github-style position."
 
 
 (defun magit-gh--diff-pos/gh->magit (file gh-pos gh-diff-body)
-  "Given a FILE and a Github-style diff position GH-POS in
-GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
+  "Convert a Github diff position to a Magit diff position.
+
+Given a FILE and a Github-style diff position GH-POS in
+GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
   (with-temp-buffer
     (save-excursion
       (insert gh-diff-body)
@@ -230,19 +243,32 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
       (re-search-forward (format "+++ b/%s" file))
       (re-search-forward "@@ -\\([0-9]+\\),\\([0-9]+\\) \\+\\([0-9]+\\),\\([0-9]+\\) @@")
       (forward-line gh-pos)
-      (magit-gh--cur-diff-pos))))
+      (let ((rev (if (looking-at "^-") :a :b))
+            (offset 0))
+        (while (not (magit-gh--try-parse-hunk-header))
+          (assert (= 0 (forward-line -1)))
+          ;; (beginning-of-line)
+          (unless (or (and (eq rev :a) (looking-at "^\\+"))
+                      (and (eq rev :b) (looking-at "^-")))
+            (cl-incf offset)))
+        (make-magit-gh-diff-pos :a-or-b rev
+                                :hunk-start (alist-get
+                                             (if (eq rev :a) :a-start :b-start)
+                                             (magit-gh--try-parse-hunk-header))
+                                :offset (1- offset))))))
 
 
 (defun magit-gh--current-section-content ()
-  "Return the contents of the magit section at point as a string"
+  "Return the contents of the magit section at point."
   (interactive)
   (buffer-substring-no-properties
    (magit-section-start (magit-current-section))
    (magit-section-end (magit-current-section))))
 
 
+;;;###autoload
 (defun magit-gh-add-comment (comment-text)
-  "Comment on the line at point and post the comment to Github"
+  "Comment on the line at point and post COMMENT-TEXT to Github."
   (interactive "MComment: ")
   (let* ((lines (split-string (magit-gh--current-section-content) "\n" t))
          (magit-pos (magit-gh--cur-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
@@ -255,19 +281,15 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
                                github-pos
                                comment-text)))
 
-;; (setq magit-gh-test-pr-comments (magit-gh--list-comments magit-gh-comment-test-pr))
-;; (setq magit-gh-test-pr-diff-body (with-current-buffer "pr-2-diffs" (buffer-substring-no-properties (point-min) (point-max))))
-;; (setq magit-gh-sample-diff-pos
-;;       (magit-gh--diff-pos/gh->magit "magit-gh-comments-github.el" 5
-;;                                     (with-current-buffer  "pr-2-diffs"
-;;                                       (buffer-substring-no-properties (point-min) (point-max)))))
-
 ;; TODO: Make nice customizable faces
 (defgroup magit-gh-comments nil
   "Add comments to Github Pull Requests from magit"
   :group 'code)
 
 (defun magit-gh--format-comment-body (s &optional fill-width)
+  "Format the string S as the body of a Github comment.
+
+Fill the paragraph up to FILL-WIDTH characters."
   (with-temp-buffer
     (insert s)
     (let ((fill-column (or fill-width 80)))
@@ -278,11 +300,16 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun magit-gh--propertize-overlay-text (s)
+  "Propertize the string S as a comment in a magit-diff buffer."
   (propertize (concat (magit-gh--format-comment-body s) "\n")
               'face 'magit-blame-highlight ;; TODO: Change this)
               ))
 
 (defun magit-gh--display-comments (comments gh-diff-body)
+  "Display comments in the magit-diff buffer.
+
+Given a sequence of COMMENTS and Github diff GH-DIFF-BODY from
+which they came, add them to current magit-diff buffer."
   (save-excursion
     (dolist (comment comments)
       (let ((magit-pos (magit-gh--diff-pos/gh->magit (alist-get :path comment)
@@ -297,15 +324,16 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
                                        (alist-get :body comment)))))))
 
 (defun magit-gh--delete-comment-overlays ()
-  "Delete all comment overlays in the current buffer"
+  "Delete all comment overlays in the current buffer."
   (interactive)
   (let ((overlays (filter (lambda (ov) (overlay-get ov 'magit-gh-comment))
                           (overlays-in (point-min) (point-max)))))
     (dolist (overlay overlays)
       (delete-overlay overlay))))
 
+;;;###autoload
 (defun magit-gh-refresh-comments ()
-  "Refresh the comments for the current PR"
+  "Refresh comments for the current PR."
   (interactive)
   (magit-gh--delete-comment-overlays)
   (-if-let* ((current-pr (magit-gh--get-current-pr))
@@ -326,8 +354,7 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos"
                                                          :pr-number id)))))
 
 (defun magit-gh--get-current-pr ()
-  "Return the Pull Request object which the user is currently
-viewing"
+  "Return the Pull Request or nil, if not set."
   (and (boundp 'magit-gh--current-pr)
        magit-gh--current-pr))
 
@@ -336,8 +363,9 @@ viewing"
 ;;; BEGIN - Debugging utilities - delete me
 
 (defun overlays-at-point ()
-  "Return overlays which touch point, with inclusive start and
-end"
+  "Return overlays which touch point.
+
+The start and end of the overlays are inclusive."
   (interactive)
   (filter (lambda (ov) (and (>= (point) (overlay-start ov))
                             (<= (point) (overlay-end ov))))
