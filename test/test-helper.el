@@ -1,8 +1,7 @@
-;; -*- lexical-binding: t -*-
+;;; test-helper.el --- Helpers for magit-gh-comments-test.el
 
-(require 'ert)
+(require 'magit)
 
-(require 'magit-gh-comments)
 
 (defun magit-gh--gen-random-string (str-len)
   (let ((gen-random-char (lambda (n) (+ ?a (random 26)))))
@@ -79,16 +78,5 @@
     (forward-line n)
     (buffer-substring (1+ (point-at-bol)) (point-at-eol))))
 
-(ert-deftest test-magit-gh--diff-pos/magit->gh ()
-  (let* ((rev-files (magit-gh--generate-revisions))
-         (magit-diff-buf (magit-gh--generate-magit-diff (car rev-files) (cdr rev-files)))
-         (random-diff-pos (magit-gh--pick-random-diff-pos magit-diff-buf)) ;; TODO: This is a terrible var name
-         (diff-pos (alist-get :diff-pos random-diff-pos))
-         (expected-line-contents (alist-get :line-contents random-diff-pos))
-         (magit-diff-body (with-current-buffer magit-diff-buf (buffer-substring (point-min) (point-max))))
-         (github-diff-pos (magit-gh--diff-pos/magit->gh diff-pos magit-diff-body))
-    (should (string= expected-line-contents
-                     (magit-gh--line-contents-at-github-pos github-diff-pos
-                                                            magit-diff-buf))))))
 
-(ert "test-magit-gh--.*")
+;;; test-helper.el ends here

@@ -1,5 +1,3 @@
- test:
-	cask emacs -q \
-		-L $(CURDIR) \
-		-l test-magit-gh-comments.el \
-		-f ert-run-tests-batch-and-exit
+.PHONY: test
+test:
+	cask exec ert-runner -L $(CURDIR)
