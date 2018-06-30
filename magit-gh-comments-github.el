@@ -1,5 +1,7 @@
 ;; -*- lexical-binding: t -*-
 
+(require 'cl)
+(require 'json)
 (require 'request)
 (require 'magit-git)
 
