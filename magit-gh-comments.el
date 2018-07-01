@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl)
+(require 'dash)
 (require 'ert)
 (require 'magit-gh-comments-github)
 
@@ -127,26 +128,29 @@ Return nil if the line at point is not a hunk-header."
               (:b-start . ,(car b-range))
               (:b-len . ,(cadr b-range))))))))
 
+
 (defun magit-gh--partition-by (xs-in fn &optional xs-out)
   "Partition XS-IN according to the function FN.
 
 Apply FN to each value in XS-IN, splitting it each time FN
 returns a new value.  Return a list of lists."
-  (if (not xs-in)
-      (reverse (cons (reverse (car xs-out)) (cdr xs-out)))
-    (cond ((not xs-out)
-           (magit-gh--partition-by (cdr xs-in)
-                                   fn
-                                   (cons (list (car xs-in)) '())))
-          ((equal (funcall fn (car xs-in))
-                  (funcall fn (caar xs-out)))
-           (magit-gh--partition-by (cdr xs-in)
-                                   fn
-                                   (cons (cons (car xs-in) (car xs-out)) (cdr xs-out))))
-          (:t
-           (magit-gh--partition-by (cdr xs-in)
-                                   fn
-                                   (cons (list (car xs-in)) (cons (reverse (car xs-out)) (cdr xs-out))))))))
+  (let ((max-lisp-eval-depth (max max-lisp-eval-depth 9999))
+        (max-specpdl-size (max max-specpdl-size 9999)))
+    (if (not xs-in)
+        (reverse (cons (reverse (car xs-out)) (cdr xs-out)))
+      (cond ((not xs-out)
+             (magit-gh--partition-by (cdr xs-in)
+                                     fn
+                                     (cons (list (car xs-in)) '())))
+            ((equal (funcall fn (car xs-in))
+                    (funcall fn (caar xs-out)))
+             (magit-gh--partition-by (cdr xs-in)
+                                     fn
+                                     (cons (cons (car xs-in) (car xs-out)) (cdr xs-out))))
+            (:t
+             (magit-gh--partition-by (cdr xs-in)
+                                     fn
+                                     (cons (list (car xs-in)) (cons (reverse (car xs-out)) (cdr xs-out)))))))))
 
 (ert-deftest test-magit-gh--partition-by ()
   (should (equal '((0 1) (2 3) (4 5))
@@ -227,20 +231,59 @@ lines in the hunk that precede POS."
     (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :b 2)))
     (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :a 3)))))
 
+(defun magit-gh--try-parse-file-header (line)
+  "Try to parse the given LINE as a file header.
 
-(defun magit-gh--diff-pos/magit->gh (pos diff-body)
+   Given a LINE from the body of a diff (of type
+application/vnd.github.v3.diff, from Github), try to parse it as
+the header of a new section in the diff.
+
+   Example:
+
+   (magit-gh--try-parse-file-header
+       \"diff --git a/magit-gh-comments-github.el b/magit-gh-comments-github.el\")
+
+
+   -> '((:a . \"magit-gh-comments-github.el\")
+        (:b . \"magit-gh-comments-github.el\"))"
+
+  (let ((file-header-re "diff --git a/\\([^ ]+\\) b/\\([^ ]+\\)$"))
+    (when (string-match file-header-re line)
+      `((:a . ,(match-string-no-properties 1 line))
+        (:b . ,(match-string-no-properties 2 line))))))
+
+(ert-deftest test-magit--try-parse-file-header ()
+  (should (equal '((:a . "foo")
+                   (:b . "bar"))
+             (magit-gh--try-parse-file-header "diff --git a/foo b/bar")))
+  (should-not (magit-gh--try-parse-file-header "+ This is not a match")))
+
+
+
+(defun magit-gh--diff-pos/magit->gh (file pos diff-body)
   "Convert a Magit diff position to a Github diff position.
 
-  Given magit diff position POS and a DIFF-BODY (of type
+   Given magit diff position POS and a DIFF-BODY (of type
 application/vnd.github.v3.diff, from Github), calculate the
 corresponding Github-style position."
   (let* ((lines (split-string diff-body "\n" t))
-         (lines (seq-drop-while
-                 ;; discard everything before the first hunk header
-                 (lambda (x) (not (magit-gh--try-parse-hunk-header x)))
-                 lines))
+         ;; apparently git strips the leading slash from file paths
+         ;; e.g., 'diff --git a/tmp/foo b/tmp/foo', not 'diff --git a//tmp/foo b//tmp/foo'
+         (clean-filename (replace-regexp-in-string "^\/" "" file))
+         (file-sections (magit-gh--pair-and-merge
+                         (magit-gh--partition-by lines
+                                                 'magit-gh--try-parse-file-header)))
+         (lines-for-file (car (-filter (lambda (file-section)
+                                         (string-match
+                                          (format "diff --git a/[^ ]+ b/%s$" clean-filename)
+                                          (car file-section)))
+                                       file-sections)))
+         (lines-for-file (seq-drop-while
+                          ;; discard everything before the first hunk header
+                          (lambda (x) (not (magit-gh--try-parse-hunk-header x)))
+                          lines-for-file))
          (lines-partitioned-by-hunk-header
-          (magit-gh--partition-by lines 'magit-gh--try-parse-hunk-header))
+          (magit-gh--partition-by lines-for-file 'magit-gh--try-parse-hunk-header))
          (hunks (magit-gh--pair-and-merge lines-partitioned-by-hunk-header))
          (hunks-not-after-target (seq-take-while
                                   (lambda (hunk)
@@ -252,7 +295,7 @@ corresponding Github-style position."
                                       (<= hunk-start (magit-gh-diff-pos-hunk-start pos))))
                                   hunks))
          (is-valid (if (not hunks-not-after-target)
-                       (user-error "Could not find a line at diff position [%s].  Last hunk: [%s]"
+                       (user-error "Could not find a line at diff position [%s]. Last hunk: [%s]"
                                    pos
                                    (caar (last hunks-not-after-target)))))
          (gh-pos-hunk-start (reduce '+ (mapcar #'length (butlast hunks-not-after-target))))
@@ -301,13 +344,12 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
 (defun magit-gh-add-comment (comment-text)
   "Comment on the line at point and post COMMENT-TEXT to Github."
   (interactive "MComment: ")
-  (let* ((lines (split-string (magit-gh--current-section-content) "\n" t))
-         (magit-pos (magit-gh--cur-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
-         (diff-body (magit-gh--current-section-content))  ;; TODO: This should by the *github* diff, not the magit diff!
-         (github-pos (magit-gh--diff-pos/magit->gh magit-pos diff-body))
+  (let* ((magit-pos (magit-gh--cur-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
+         (diff-body (magit-gh--fetch-diff-from-github (magit-gh--get-current-pr)))
+         (github-pos (magit-gh--diff-pos/magit->gh (magit-current-file) magit-pos diff-body))
          (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
     (magit-gh--post-pr-comment (magit-gh--get-current-pr)
-                               (magit-current-file)
+                               (magit-current-file) ;; FIXME: Add current-file to github-pos, get rid of this arg
                                commit-sha
                                github-pos
                                comment-text)))
@@ -352,7 +394,9 @@ which they came, add them to current magit-diff buffer."
         (overlay-put ov 'magit-gh-comment comment)
         (overlay-put ov 'face 'underline)
         (overlay-put ov 'after-string (magit-gh--propertize-overlay-text
-                                       (alist-get :body comment)))))))
+                                       (format "%s - @%s"
+                                               (alist-get :body comment)
+                                               (alist-get :author comment))))))))
 
 (defun magit-gh--delete-comment-overlays ()
   "Delete all comment overlays in the current buffer."

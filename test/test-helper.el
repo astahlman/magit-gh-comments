@@ -45,7 +45,7 @@
         (num-context-lines (number-to-string (+ 3 (random 5)))))
     (when (get-buffer buf-name)
       (kill-buffer buf-name))
-    (call-process "git" nil buf-name nil "--no-pager" "diff" "-U" num-context-lines "--no-index" "/tmp/a.txt" "/tmp/b.txt")
+    (call-process "git" nil buf-name nil "--no-pager" "diff" (format "-U%s" num-context-lines) "--no-index" "/tmp/a.txt" "/tmp/b.txt")
     buf-name))
 
 
