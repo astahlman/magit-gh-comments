@@ -407,6 +407,8 @@ which they came, add them to current magit-diff buffer."
       (delete-overlay overlay))))
 
 ;;;###autoload
+;; TODO: Assert that the current magit-gh-pull revision is up to date
+;; with HEAD of the PR branch
 (defun magit-gh-refresh-comments ()
   "Refresh comments for the current PR."
   (interactive)

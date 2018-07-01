@@ -7,8 +7,8 @@
 
 (defstruct magit-gh-pr owner repo-name pr-number)
 
-(setq request-message-level 'debug)
-(setq request-log-level 'debug)
+(setq request-message-level 'info)
+(setq request-log-level 'info)
 
 (setq magit-gh-comment-test-pr (make-magit-gh-pr :owner "astahlman"
                                                  :repo-name "magit-gh-comments"
