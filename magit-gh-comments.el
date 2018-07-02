@@ -247,7 +247,7 @@ the header of a new section in the diff.
    -> '((:a . \"magit-gh-comments-github.el\")
         (:b . \"magit-gh-comments-github.el\"))"
 
-  (let ((file-header-re "diff --git a/\\([^ ]+\\) b/\\([^ ]+\\)$"))
+  (let ((file-header-re "^diff --git a/\\([^ ]+\\) b/\\([^ ]+\\)$"))
     (when (string-match file-header-re line)
       `((:a . ,(match-string-no-properties 1 line))
         (:b . ,(match-string-no-properties 2 line))))))
@@ -257,7 +257,6 @@ the header of a new section in the diff.
                    (:b . "bar"))
              (magit-gh--try-parse-file-header "diff --git a/foo b/bar")))
   (should-not (magit-gh--try-parse-file-header "+ This is not a match")))
-
 
 
 (defun magit-gh--diff-pos/magit->gh (file pos diff-body)
@@ -321,7 +320,6 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
             (offset 0))
         (while (not (magit-gh--try-parse-hunk-header))
           (assert (= 0 (forward-line -1)))
-          ;; (beginning-of-line)
           (unless (or (and (eq rev :a) (looking-at "^\\+"))
                       (and (eq rev :b) (looking-at "^-")))
             (cl-incf offset)))
