@@ -1,8 +1,7 @@
-;; -*- lexical-binding: t -*-
+;;; test-helper.el --- Helpers for magit-gh-comments-test.el
 
-(require 'ert)
+(require 'magit)
 
-(require 'magit-gh-comments)
 
 (defun magit-gh--gen-random-string (str-len)
   (let ((gen-random-char (lambda (n) (+ ?a (random 26)))))
@@ -46,18 +45,22 @@
         (num-context-lines (number-to-string (+ 3 (random 5)))))
     (when (get-buffer buf-name)
       (kill-buffer buf-name))
-    (call-process "git" nil buf-name nil "--no-pager" "diff" "-U" num-context-lines "--no-index" "/tmp/a.txt" "/tmp/b.txt")
+    (call-process "git" nil buf-name nil "--no-pager" "diff" (format "-U%s" num-context-lines) "--no-index" "/tmp/a.txt" "/tmp/b.txt")
     buf-name))
 
-(defun magit-gh--generate-magit-diff (rev-a-file rev-b-file)
-  (let ((buf-name "*magit-gh-magit-diff*"))
+
+(defun magit-gh--generate-magit-diff (rev-a rev-b)
+  (let ((buf-name "*magit-gh-test*"))
     (when (get-buffer buf-name)
       (kill-buffer buf-name))
-    (call-process "git" nil buf-name nil "--no-pager" "diff" "--no-index" rev-a-file rev-b-file)
+    (with-current-buffer (get-buffer-create buf-name)
+      (magit-git-wash #'magit-diff-wash-diffs
+        "diff" "--no-index" "-p" "--no-prefix"
+        rev-a
+        rev-b))
     buf-name))
 
-
-(defun magit-gh--pick-random-line-in-diff (diff-buf)
+(defun magit-gh--pick-random-diff-pos (diff-buf)
   (let (num-changes)
     (with-current-buffer diff-buf
       (goto-char (point-min))
@@ -75,16 +78,5 @@
     (forward-line n)
     (buffer-substring (1+ (point-at-bol)) (point-at-eol))))
 
-(ert-deftest test-magit-gh--translate-diff-pos ()
-  (let* ((rev-files (magit-gh--generate-revisions))
-         (magit-diff-buf (magit-gh--generate-magit-diff (car rev-files) (cdr rev-files)))
-         (random-line-in-diff (magit-gh--pick-random-line-in-diff magit-diff-buf)) ;; TODO: This is a terrible var name
-         (diff-pos (alist-get :diff-pos random-line-in-diff))
-         (expected-line-contents (alist-get :line-contents random-line-in-diff))
-         (github-diff-pos (with-current-buffer magit-diff-buf
-                            (magit-gh--translate-diff-pos diff-pos))))
-    (should (string= expected-line-contents
-                     (magit-gh--line-contents-at-github-pos github-diff-pos
-                                                            magit-diff-buf)))))
 
-(ert "test-magit-gh--.*")
+;;; test-helper.el ends here
