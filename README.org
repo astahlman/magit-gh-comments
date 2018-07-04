@@ -1,6 +1,45 @@
-This isn't anything yet. Go away.
+#+TITLE: README
+#+AUTHOR: Andrew Stahlman
 
-* Subproblems
-** Adding comments with annotate
-** Pushing/pulling comments via the Github API
-Can we use gh.el?
+* Disclaimer
+
+This is README is... [[http://tom.preston-werner.com/2010/08/23/readme-driven-development.html][aspirational]]. I'm still actively developing this
+package, and there's a large gap between what's advertised here and
+what has been implemented so far.
+
+* Overview
+
+=magit-gh-comments= is a minor-mode which enables commenting on Github
+PRs from within Magit.
+
+* Dependencies
+
+This package must be used in conjuction with [[https://github.com/sigma/magit-gh-pulls][magit-gh-pulls]] and, of
+course, [[https://magit.vc/][magit]].
+
+* Keybindings
+
+=magit-gh-comments= defines the following keybindings:
+
+- =C-c C-p= :: jump previous comment
+- =C-c C-n= :: jump to next commment
+- =C= :: open the =magit-gh-comments= popup menu
+
+From the popup menu, you may choose to (a)dd, (e)dit, (d)elete, or
+(r)efresh the comments on the active Github PR.
+
+* Usage
+
+PR Comments are automatically loaded and displayed inline in any
+magit-diff buffer opened from the =[Pull Requests]= section (see
+[[*Dependencies][Dependencies]]).
+
+To post a comment on the line at point, press =C a= from within a diff
+buf. Edit the comment at point with =C e=. =C d= deletes the comment a
+point.
+
+* Troubleshooting
+
+The function =magit-gh-comments-report-bug= will prepare an Org file
+with some diagnostic information about your Emacs environment that you
+can attach when filing an Issue.
