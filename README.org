@@ -35,7 +35,7 @@ magit-diff buffer opened from the =[Pull Requests]= section (see
 [[*Dependencies][Dependencies]]).
 
 To post a comment on the line at point, press =C a= from within a diff
-buf. Edit the comment at point with =C e=. =C d= deletes the comment a
+buff. Edit the comment at point with =C e=. =C d= deletes the comment a
 point.
 
 * Troubleshooting
