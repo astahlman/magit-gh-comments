@@ -412,10 +412,11 @@ which they came, add them to current magit-diff buffer."
   (interactive)
   (magit-gh--delete-comment-overlays)
   (-if-let* ((current-pr (magit-gh--get-current-pr))
-             (comments (magit-gh--list-comments current-pr))
-             (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
+             (gh-diff (magit-gh--fetch-diff-from-github current-pr))
+             (comments (magit-gh--list-comments current-pr)))
       (magit-gh--display-comments comments gh-diff)
-    (error "Couldn't fetch the PR associated with this diff! (This is likely a bug)")))
+    (when (not (and current-pr gh-diff))
+      (error "Couldn't fetch the PR associated with this diff! (This is likely a bug)"))))
 
 
 ;; Capture and store the associated PR when the user views its diff
