@@ -1,4 +1,4 @@
-#+TITLE: README
+#+TITLE: magit-gh-comments.el
 #+AUTHOR: Andrew Stahlman
 
 * Disclaimer
