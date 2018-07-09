@@ -352,6 +352,9 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
                                github-pos
                                comment-text)))
 
+(magit-define-popup-action 'magit-gh-pulls-popup
+  ?k "Comment on line at point" #'magit-gh-add-comment)
+
 ;; TODO: Make nice customizable faces
 (defgroup magit-gh-comments nil
   "Add comments to Github Pull Requests from magit"
@@ -404,30 +407,34 @@ which they came, add them to current magit-diff buffer."
     (dolist (overlay overlays)
       (delete-overlay overlay))))
 
-;;;###autoload
 ;; TODO: Assert that the current magit-gh-pull revision is up to date
 ;; with HEAD of the PR branch
-(defun magit-gh-refresh-comments ()
+(defun magit-gh--refresh-comments ()
   "Refresh comments for the current PR."
   (interactive)
-  (magit-gh--delete-comment-overlays)
-  (-if-let* ((current-pr (magit-gh--get-current-pr))
-             (gh-diff (magit-gh--fetch-diff-from-github current-pr))
-             (comments (magit-gh--list-comments current-pr)))
-      (magit-gh--display-comments comments gh-diff)
-    (when (not (and current-pr gh-diff))
-      (error "Couldn't fetch the PR associated with this diff! (This is likely a bug)"))))
+  (let ((start-point (point))) ;; Why doesn't save-excursion work here??
+    (magit-gh--delete-comment-overlays)
+    (when (and (magit-gh--get-current-pr)
+               (derived-mode-p 'magit-diff-mode))
+      (-if-let* ((current-pr (magit-gh--get-current-pr))
+                 (comments (magit-gh--list-comments current-pr))
+                 (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
+          (magit-gh--display-comments comments gh-diff)))
+    (goto-char start-point)))
 
+;; (remove-hook 'magit-post-refresh-hook #'magit-gh--refresh-comments)
+(add-hook 'magit-post-refresh-hook #'magit-gh--refresh-comments)
 
 ;; Capture and store the associated PR when the user views its diff
 ;; from the magit Pull Requests section
-(define-advice magit-gh-pulls-diff-pull-request (:around (original-fn) capture-current-pull-request)
+(defun capture-current-pull-request ()
   (let ((section-val (magit-section-value (magit-current-section))))
-    (funcall original-fn)
     (destructuring-bind (user proj id) section-val
-      (setq-local magit-gh--current-pr (make-magit-gh-pr :owner user
-                                                         :repo-name proj
-                                                         :pr-number id)))))
+      (setq magit-gh--current-pr (make-magit-gh-pr :owner user
+                                                   :repo-name proj
+                                                   :pr-number id)))))
+
+(advice-add 'magit-gh-pulls-diff-pull-request :before #'capture-current-pull-request)
 
 (defun magit-gh--get-current-pr ()
   "Return the Pull Request or nil, if not set."
@@ -437,6 +444,13 @@ which they came, add them to current magit-diff buffer."
 (provide 'magit-gh-comments)
 
 ;;; BEGIN - Debugging utilities - delete me
+
+(defun magit-gh--comment-at-point ()
+  "Return the comment overlay at point, if it exists."
+  (car (-filter (lambda (ov) (and (overlay-get ov 'magit-gh-comment)
+                                  (>= (overlay-start ov) (point))
+                                  (<= (overlay-end ov) (point))))
+                (-flatten (overlay-lists)))))
 
 (defun overlays-at-point ()
   "Return overlays which touch point.
