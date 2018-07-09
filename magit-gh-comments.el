@@ -399,8 +399,8 @@ which they came, add them to current magit-diff buffer."
 (defun magit-gh--delete-comment-overlays ()
   "Delete all comment overlays in the current buffer."
   (interactive)
-  (let ((overlays (filter (lambda (ov) (overlay-get ov 'magit-gh-comment))
-                          (overlays-in (point-min) (point-max)))))
+  (let ((overlays (-filter (lambda (ov) (overlay-get ov 'magit-gh-comment))
+                           (overlays-in (point-min) (point-max)))))
     (dolist (overlay overlays)
       (delete-overlay overlay))))
 
