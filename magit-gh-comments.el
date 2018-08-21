@@ -37,7 +37,11 @@
 (require 'ert)
 (require 'magit-gh-comments-github)
 
+;; - A-OR-B is the revision we're looking at, :a or :b (old or new)
+;; - HUNK-START corresponds to the number in the hunk-header
+;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
+
 (defstruct magit-gh-comment file diff-pos text)
 
 
@@ -203,10 +207,10 @@ the (Github-style) position within the hunk as 1 + the number of
 lines in the hunk that precede POS."
   (let* ((magit-offset (magit-gh-diff-pos-offset pos))
          (char-to-ignore (if (eq (magit-gh-diff-pos-a-or-b pos) :a) ?+ ?-))
-         (lines-preceding-target (seq-take-while (lambda (n) (< n (1+ magit-offset)))
+         (lines-preceding-target (seq-take-while (lambda (n) (< n magit-offset))
                                                 (magit-gh--running-sum
                                                  (mapcar (lambda (line)
-                                                           (if (not (= char-to-ignore (elt line 0))) 1 0))
+                                                           (if (= char-to-ignore (elt line 0)) 0 1))
                                                          lines)))))
     (if (= (length lines-preceding-target)
              (length lines))

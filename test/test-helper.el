@@ -78,5 +78,11 @@
     (forward-line n)
     (buffer-substring (1+ (point-at-bol)) (point-at-eol))))
 
+(defun magit-gh--put-in-buffer (contents)
+  (let ((buf-name "*magit-gh-github-diff*"))
+    (when (get-buffer buf-name)
+      (kill-buffer buf-name))
+    (with-current-buffer (get-buffer-create buf-name) (insert contents))
+    buf-name))
 
 ;;; test-helper.el ends here
