@@ -438,17 +438,8 @@ which they came, add them to current magit-diff buffer."
                    (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
             (magit-gh--display-comments comments gh-diff))))))
 
-;; (remove-hook 'magit-post-refresh-hook #'magit-gh--refresh-comments)
 (add-hook 'magit-refresh-buffer-hook #'magit-gh--refresh-comments)
-;; (defun magit-gh--save-point ()
-;;   (setq magit-gh--current-point (point)))
-;; (defun magit-gh--restore-point ()
-;;   (message "Returning back to %s from %s after save" magit-gh--current-point (point))
-;;   (goto-char magit-gh--current-point))
-;; (add-hook 'magit-pre-refresh-hook #'magit-gh--save-point)
-;; (remove-hook 'magit-post-refresh-hook #'magit-gh--restore-point)
-;; (remove-hook 'magit-unwind-refresh-hook #'magit-gh--restore-point)
-
+;; (remove-hook 'magit-refresh-buffer-hook #'magit-gh--refresh-comments)
 
 ;; Capture and store the associated PR when the user views its diff
 ;; from the magit Pull Requests section
@@ -537,13 +528,37 @@ which they came, add them to current magit-diff buffer."
                   result))
       (setq i (1+ i)))))
 
-
-(defun magit-gh--jump-to-diff-for-comment ()
-  (interactive)
-  (magit-diff (magit-gh-pr-diff-range magit-gh--current-pr)))
+(defun magit-gh--comment-ctx (diff-body gh-pos file)
+  (letfn ((walk-within-hunk (lambda (n)
+                              "Walk N lines, stopping at hunk headers"
+                              (when (looking-at-p magit-gh--hunk-header-re)
+                                (error "Position must be inside a hunk!"))
+                              (while (and (not (zerop n))
+                                          (not (looking-at-p magit-gh--hunk-header-re)))
+                                (forward-line (/ n (abs n)))
+                                (setq n (- n (/ n (abs n))))))))
+         (save-excursion
+           (magit-gh--with-temp-buffer
+             (insert diff-body)
+             (goto-char (point-min))
+             (magit-gh--paint-diff)
+             (goto-char (point-min))
+             (magit-gh--jump-to-file-in-diff file)
+             (re-search-forward magit-gh--hunk-header-re)
+             (forward-line gh-pos)
+             (let* ((num-lines-ctx-before 3)
+                    (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
+                                         (point)))
+                    (end (save-excursion (end-of-line)
+                                         (point))))
+               (format "%s\n%s" file (buffer-substring beg end)))))))
 
 (defun magit-gh-show-reviews (&optional pr)
   (interactive)
+  ;; TODO: Do we still need magit-gh--current-pr as a global variable,
+  ;; now that we have overridden the keymap to use our own function
+  ;; instead of advising the one from magit-gh-pulls?
+  (capture-current-pull-request)
   (switch-to-buffer (magit-gh--populate-reviews (or pr magit-gh--current-pr))))
 
 (provide 'magit-gh-comments)

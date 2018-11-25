@@ -12,7 +12,7 @@
 (setq request-message-level 'debug)
 (setq request-log-level 'debug)
 
-(defvar magit-gh--request-timeout-seconds 3)
+(defvar magit-gh--request-timeout-seconds 5)
 
 (setq magit-gh-comment-test-pr (make-magit-gh-pr :owner "astahlman"
                                                  :repo-name "magit-gh-comments"
@@ -66,21 +66,22 @@ the function may return before all slots of the
 ensure that the process sentinels for the curl command have
 completed and our callbacks have set a return value before this
 function returns."
-  (lexical-let (result err-code)
+  (lexical-let (result err-code finished-p)
     (apply #'request url
            :success (function* (lambda (&key data &allow-other-keys)
-                                 (setq result data)))
+                                 (setq result data
+                                       finished-p t)))
            :parser parser
            :timeout timeout
            :error (function* (lambda (&key response data &allow-other-keys)
-                               (setq result data)
-                               (setq err-code (request-response-status-code response))))
+                               (setq result data
+                                     finished-p t
+                                     err-code (request-response-status-code response))))
            request-args)
     (with-timeout (magit-gh--request-timeout-seconds
                    (error "Timeout in request to Github!"))
       ;; Ensure the callbacks have had a chance to run before returning
-      (while (and (not result)
-                  (not err-code))
+      (while (not finished-p)
         (sit-for .05))
       (if err-code
           (error "Error fetching from %s [%s]: %s" url err-code result)
@@ -169,39 +170,6 @@ element of the result is an alist with the following keys:
   (-filter 'identity ;; remove nils
           (mapcar (lambda (k) (magit-gh--assoc-recursive k alist))
                   keys)))
-
-(defun magit-gh--response-parser-backup (fields-of-interest)
-  "Parse an array of alists, extracting only FIELDS-OF-INTEREST
-and transforming the keys into colon-prefixed symbols.
-
-e.g., with FIELDS-OF-INTEREST = '(foo):
-
-(((foo . 1) (bar . 2)) ((foo . 3) (bar . 4))) -> (((:foo . 1)) ((:foo . 3)))"
-  (lambda ()
-    (cl-flet ((sym-to-keyword (x)
-                              (intern (format ":%s" x)))
-              (alist-filter (keys alist)
-                            (-filter 'identity ;; remove nils
-                                    (mapcar (lambda (k) (magit-gh--assoc-recursive k alist))
-                                            keys)))
-              (alist-map-keys (fn alist)
-                              (let (result)
-                                (reverse
-                                 (dolist (cell alist result)
-                                   (setq result
-                                         (cons
-                                          (cons (funcall fn (car cell))
-                                                (cdr cell))
-                                          result)))))))
-      (let* ((json-array-type 'list)
-             (data (json-read-array))
-             out)
-        (dolist (alist data)
-          (setq out (cons (alist-filter fields-of-interest alist)
-                             out)))
-        (reverse (mapcar
-                  (lambda (x) (alist-map-keys #'sym-to-keyword x))
-                  out))))))
 
 (defun magit-gh--rename-key (alist from to)
   "Replace all keys in ALIST where value is FROM with the value TO."

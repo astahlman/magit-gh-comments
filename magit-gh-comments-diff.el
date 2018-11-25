@@ -16,10 +16,4 @@
                           (t 'magit-diff-context)))
       (forward-line 1))))
 
-(defun magit-gh--visit-diff-pos (file magit-gh-pos)
-  ;; 1. If pos.a-or-b == :b:
-  ;; 2. Open a buffer pointing to the file (TODO: from worktree or blob?)
-  ;; 3. Extract the hunk start and offset from the magit-gh-pos
-  ;; 4. Move forward hunk-start + offset
-  )
 (provide 'magit-gh-comments-diff)

@@ -160,48 +160,6 @@ index 9fda99d..f88549a 100644
                                   (:position . 9)))
                                (magit-gh--list-comments magit-gh--test-pr))))))
 
-;; (setq test-reviews (magit-gh--list-reviews magit-gh--test-pr))
-
-;; TODO: Delete?
-(defun magit-gh--jump-to-file-section (file)
-  (interactive "sFile name: ")
-  (goto-char (point-min))
-  (let (foundp)
-    (while (not foundp)
-      (magit-section-when
-          (and (equalp file (oref it type))
-               (equalp (format "b/%s" file)
-                       (oref it value)))
-        (setq foundp t))
-      (when (not foundp)
-        (magit-section-forward)))))
-
-
-(defun magit-gh--comment-ctx (diff-body gh-pos file)
-  (letfn ((walk-within-hunk (lambda (n)
-                              "Walk N lines, stopping at hunk headers"
-                              (when (looking-at-p magit-gh--hunk-header-re)
-                                (error "Position must be inside a hunk!"))
-                              (while (and (not (zerop n))
-                                          (not (looking-at-p magit-gh--hunk-header-re)))
-                                (forward-line (/ n (abs n)))
-                                (setq n (- n (/ n (abs n))))))))
-         (save-excursion
-           (magit-gh--with-temp-buffer
-             (insert diff-body)
-             (goto-char (point-min))
-             (magit-gh--paint-diff)
-             (goto-char (point-min))
-             (magit-gh--jump-to-file-in-diff file)
-             (re-search-forward magit-gh--hunk-header-re)
-             (forward-line gh-pos)
-             (let* ((num-lines-ctx-before 3)
-                    (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
-                                         (point)))
-                    (end (save-excursion (end-of-line)
-                                         (point))))
-               (format "%s\n%s" file (buffer-substring beg end)))))))
-
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
 index 9fda99d..f88549a 100644
