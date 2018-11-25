@@ -2,6 +2,23 @@
 
 (require 'magit)
 
+(defun magit-gh--looking-at-p (s)
+  "Like `looking-at-p', but with nicer output.
+
+Unlike `looking-at-p', on failure this function reports the
+actual string at point. This makes it easier to diagnose test
+failures.
+"
+  (let ((result (looking-at-p (regexp-quote s))))
+    (if (not result)
+        (error (format "Expected to be looking at: %s\nActually looking at: %s"
+                       s
+                       (buffer-substring-no-properties
+                        (point)
+                        (save-excursion (forward-line 10) (point)))))
+      result)))
+
+
 
 (defun magit-gh--gen-random-string (str-len)
   (let ((gen-random-char (lambda (n) (+ ?a (random 26)))))
@@ -84,5 +101,34 @@
       (kill-buffer buf-name))
     (with-current-buffer (get-buffer-create buf-name) (insert contents))
     buf-name))
+
+(defun magit-gh--section-content-as-string (&optional section)
+  "Return the content of SECTION as a string.
+
+If SECTION is not supplied, use the value of
+`magit-current-section'."
+  (let ((section (or section (magit-current-section))))
+    (buffer-substring-no-properties (oref section start)
+                                    (oref section end))))
+
+
+(defun magit-gh--str-without-props (s)
+  (let ((result (copy-seq s)))
+    (progn
+      (set-text-properties 0 (length result) nil result)
+      result)))
+
+
+(defmacro magit-gh--with-temp-buffer (&rest forms)
+  "Like `with-temp-buffer', but keep the buffer around for
+debugging during testing."
+  (declare (indent 0) (debug t))
+  `(if (ert-running-test)
+       (progn
+         (when (get-buffer "magit-gh-temp-buffer")
+           (kill-buffer "magit-gh-temp-buffer"))
+         (with-current-buffer (get-buffer-create "magit-gh-temp-buffer")
+           ,@forms))
+     (with-temp-buffer ,@forms)))
 
 ;;; test-helper.el ends here

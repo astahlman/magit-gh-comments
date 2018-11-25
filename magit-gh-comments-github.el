@@ -5,10 +5,12 @@
 (require 'request)
 (require 'magit-git)
 
-(defstruct magit-gh-pr owner repo-name pr-number)
+;; https://developer.github.com/v3/pulls/#list-pull-requests
+;; TODO: Add title, body, and state (at a minimum)
+(defstruct magit-gh-pr owner repo-name pr-number diff-range)
 
-(setq request-message-level 'info)
-(setq request-log-level 'info)
+(setq request-message-level 'debug)
+(setq request-log-level 'debug)
 
 (defvar magit-gh--request-timeout-seconds 3)
 
@@ -31,11 +33,27 @@
 (defun magit-gh--url-for-pr-comments (pr)
   (format "%s/comments" (magit-gh--url-for-pr pr)))
 
-(cl-defun magit-gh--request-sync (url &rest request-args
-                                      &key
-                                      (parser #'buffer-string)
-                                      (timeout magit-gh--request-timeout-seconds)
-                                      &allow-other-keys)
+(defun magit-gh--url-for-pr-reviews (pr)
+  (format "%s/reviews" (magit-gh--url-for-pr pr)))
+
+;; TODO: Put this back, just don't want to wipe out my cache without wifi
+(setq magit-gh--request-cache nil)
+(cl-defun magit-gh--request-sync (url &rest request-args)
+  (let ((response (or (cdr (assoc (list url request-args) magit-gh--request-cache))
+                      (let ((http-result (apply #'magit-gh--request-sync-internal url request-args)))
+                        (map-put magit-gh--request-cache
+                                 (list url request-args)
+                                 http-result)
+                        http-result))))
+    (if (listp response)
+        (magit-gh--keys->keywords response)
+      response)))
+
+(cl-defun magit-gh--request-sync-internal (url &rest request-args
+                                               &key
+                                               (parser #'buffer-string)
+                                               (timeout magit-gh--request-timeout-seconds)
+                                               &allow-other-keys)
   "Execute an authorized, synchronous HTTP request.
 
 This function is guaranteed to either timeout, error out, or
@@ -110,42 +128,127 @@ element of the result is an alist with the following keys:
 :position - The comment's Github-style position in the diff
 :author - The Github username of the comments' author
 :path - The path to the file to which this comment applies"
-  (cl-flet ((outdated-p (comment)
-                        (not (alist-get 'position comment)))
-            (sym-to-keyword (x)
-                            (intern (format ":%s" x)))
-            (alist-filter (keys alist)
-                          (filter 'identity ;; remove nils
-                                  (mapcar (lambda (k)
-                                            (assoc k alist))
-                                          keys)))
-            (alist-map-keys (fn alist)
-                            (let (result)
-                              (reverse
-                               (dolist (cell alist result)
-                                 (setq result
-                                       (cons
-                                        (cons (funcall fn (car cell))
-                                              (cdr cell))
-                                        result)))))))
-    (let ((comment-fields '(body position author path))
-          (comments (magit-gh--request-sync
-                     (magit-gh--url-for-pr-comments pr)
-                     :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
-                     :parser (lambda ()
-                               (let ((json-array-type 'list))
-                                 (json-read-array)))))
-          result)
-      (dolist (comment (remove-if #'outdated-p comments))
-        (let* ((author (alist-get 'login (alist-get 'user comment)))
-               (comment (add-to-list 'comment `(author . ,author))))
-          (setq result (cons (alist-filter comment-fields comment)
-                             result))))
-      (reverse (mapcar
-                (lambda (x) (alist-map-keys #'sym-to-keyword x))
-                result)))))
+  (apply 'append
+         (mapcar (lambda (review) (alist-get :comments review))
+                 (magit-gh--list-reviews pr))))
+
 
 ;; TODO: Make an integration test out of this:
 ;; (magit-gh--list-comments magit-gh-comment-test-pr)
+;; (magit-gh--list-reviews magit-gh-comment-test-pr)
+
+(defun magit-gh--assoc-recursive (keys alist)
+  (cond ((not (listp keys)) (magit-gh--assoc-recursive (list keys) alist))
+        ((not keys) nil)
+        ((not (listp alist)) nil)
+        ((not (cdr keys)) (assoc (car keys) alist))
+        (t (magit-gh--assoc-recursive (cdr keys) (cdr (assoc (car keys) alist))))))
+
+
+(defun magit-gh--parse-json-array ()
+ (let ((json-array-type 'list))
+   (json-read-array)))
+
+(defun magit-gh--keys->keywords (alist)
+  "Transform the keys in ALIST into colon-prefixed symbols."
+    (cl-flet ((sym-to-keyword (x)
+                              (intern (format ":%s" x)))
+              (alist-map-keys (fn alist)
+                              (let (result)
+                                (reverse
+                                 (dolist (cell alist result)
+                                   (setq result
+                                         (cons
+                                          (cons (funcall fn (car cell))
+                                                (cdr cell))
+                                          result)))))))
+        (mapcar (lambda (x) (alist-map-keys #'sym-to-keyword x))
+                alist)))
+
+(defun magit-gh--alist-filter (keys alist)
+  (-filter 'identity ;; remove nils
+          (mapcar (lambda (k) (magit-gh--assoc-recursive k alist))
+                  keys)))
+
+(defun magit-gh--response-parser-backup (fields-of-interest)
+  "Parse an array of alists, extracting only FIELDS-OF-INTEREST
+and transforming the keys into colon-prefixed symbols.
+
+e.g., with FIELDS-OF-INTEREST = '(foo):
+
+(((foo . 1) (bar . 2)) ((foo . 3) (bar . 4))) -> (((:foo . 1)) ((:foo . 3)))"
+  (lambda ()
+    (cl-flet ((sym-to-keyword (x)
+                              (intern (format ":%s" x)))
+              (alist-filter (keys alist)
+                            (-filter 'identity ;; remove nils
+                                    (mapcar (lambda (k) (magit-gh--assoc-recursive k alist))
+                                            keys)))
+              (alist-map-keys (fn alist)
+                              (let (result)
+                                (reverse
+                                 (dolist (cell alist result)
+                                   (setq result
+                                         (cons
+                                          (cons (funcall fn (car cell))
+                                                (cdr cell))
+                                          result)))))))
+      (let* ((json-array-type 'list)
+             (data (json-read-array))
+             out)
+        (dolist (alist data)
+          (setq out (cons (alist-filter fields-of-interest alist)
+                             out)))
+        (reverse (mapcar
+                  (lambda (x) (alist-map-keys #'sym-to-keyword x))
+                  out))))))
+
+(defun magit-gh--rename-key (alist from to)
+  "Replace all keys in ALIST where value is FROM with the value TO."
+  (mapcar (lambda (pair)
+            (if (equal from (car pair))
+                `(,to . ,(cdr pair))
+              pair))
+          alist))
+
+(defun magit-gh--alist-values (alist)
+  (mapcar #'cdr alist))
+
+;; TODO: Refactor this to use magit-gh--response-parser?
+(defun magit-gh--list-reviews (pr)
+  "Return a list of reviews on the given PR."
+  (let* ((reviews (magit-gh--request-sync
+                   (magit-gh--url-for-pr-reviews pr)
+                   :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
+                   :parser #'magit-gh--parse-json-array))
+         (reviews (mapcar (lambda (review)
+                            (magit-gh--alist-filter '(:id (:user login) :body :state)
+                                                    review))
+                          reviews))
+         (reviews (mapcar (lambda (review) (magit-gh--rename-key review 'login :author)) reviews))
+         (comments (magit-gh--request-sync
+                    (magit-gh--url-for-pr-comments pr)
+                    :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
+                    :parser #'magit-gh--parse-json-array))
+         (comments (mapcar (lambda (comment)
+                             (magit-gh--alist-filter '(:pull_request_review_id (:user login) :body :path :position)
+                                                     comment))
+                           comments))
+         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment 'login :author)) comments)))
+    ;; review-id -> ((:comments ...) (:id . $id) (:body . $body) (:author . $user))
+    (let* ((reviews (-group-by (-partial #'alist-get :id) reviews))
+           ;; alist values are list of lists - unnest them as a single list
+           (reviews (mapcar (lambda (x) `(,(car x) . ,(cadr x))) reviews)))
+      (dolist (comment comments (magit-gh--alist-values reviews))
+        (let* ((review-id (or (alist-get :pull_request_review_id comment)
+                              (error "Could not find the review associated with this comment!")))
+               (review (alist-get review-id reviews))
+               (review-comments (alist-get :comments review)))
+          (map-put review :comments
+                   (cons comment review-comments))
+          (map-put reviews review-id review))))))
+
+;; (setq my-reviews (magit-gh--list-reviews magit-gh-comment-test-pr))
+;; (magit-gh--pretty-print my-reviews)
 
 (provide 'magit-gh-comments-github)

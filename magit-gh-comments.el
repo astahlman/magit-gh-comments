@@ -32,10 +32,13 @@
 
 ;;; Code:
 
+(add-to-list 'load-path (file-name-directory (or load-file-name buffer-file-name)))
+
 (require 'cl)
 (require 'dash)
 (require 'ert)
 (require 'magit-gh-comments-github)
+(require 'magit-gh-comments-diff)
 
 ;; - A-OR-B is the revision we're looking at, :a or :b (old or new)
 ;; - HUNK-START corresponds to the number in the hunk-header
@@ -45,8 +48,17 @@
 (defstruct magit-gh-comment file diff-pos text)
 
 
+;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
+;; Instead of jumping to a magit-diff, we'll open a buffer that shows all
+;; of the reviews and comments
+(setq magit-pull-section-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [remap magit-visit-thing]      'magit-gh-show-reviews)
+    map))
+
 (defun magit-gh--cur-diff-pos ()
   "Return the current, magit-style, position in the diff."
+  (interactive)
   (let* ((hunk-header (magit-gh--try-parse-hunk-header2)) ;; TODO: How will this handle new files?
          (rev (save-excursion (goto-char (line-beginning-position))
                               (if (looking-at "^-") :a :b)))
@@ -98,7 +110,7 @@ magit-gh-diff-pos POS in the section for FILE."
                (hunk-header (magit-gh--try-parse-hunk-header2))
                (start (alist-get (if (eq :a rev) :a-start :b-start)
                                  hunk-header)))
-          (while (<= (+ start i) target)
+          (while (< (+ start i) target)
             (assert (= 0 (forward-line)))
             (unless (looking-at
                      (format "^%s" (if (eq :a rev) "\\+" "-")))
@@ -114,7 +126,7 @@ Return nil if the line at point is not a hunk-header."
     (with-temp-buffer
       (insert line)
       (goto-char (point-min))
-      (if (looking-at "@@ -\\([0-9]+\\),\\([0-9]+\\) \\+\\([0-9]+\\),\\([0-9]+\\) @@")
+      (if (looking-at magit-gh--hunk-header-re)
           `((:a-start . ,(string-to-number (match-string 1)))
             (:a-len . ,(string-to-number (match-string 2)))
             (:b-start . ,(string-to-number (match-string 3)))
@@ -223,17 +235,17 @@ lines in the hunk that precede POS."
                                             :offset offset)))
         (lines '("-foo" "+bar" "buzz" "-bam")))
     (should (= 1
-               (magit-gh--calc-gh-offset lines (funcall make-pos :a 0))))
+               (magit-gh--calc-gh-offset lines (funcall make-pos :a 1))))
     (should (= 2
-               (magit-gh--calc-gh-offset lines (funcall make-pos :b 0))))
-    (should (= 3
                (magit-gh--calc-gh-offset lines (funcall make-pos :b 1))))
     (should (= 3
-               (magit-gh--calc-gh-offset lines (funcall make-pos :a 1))))
-    (should (= 4
+               (magit-gh--calc-gh-offset lines (funcall make-pos :b 2))))
+    (should (= 3
                (magit-gh--calc-gh-offset lines (funcall make-pos :a 2))))
-    (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :b 2)))
-    (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :a 3)))))
+    (should (= 4
+               (magit-gh--calc-gh-offset lines (funcall make-pos :a 3))))
+    (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :b 3)))
+    (should-error (magit-gh--calc-gh-offset lines (funcall make-pos :a 4)))))
 
 (defun magit-gh--try-parse-file-header (line)
   "Try to parse the given LINE as a file header.
@@ -307,7 +319,6 @@ corresponding Github-style position."
     (+ gh-pos-hunk-start
        gh-hunk-offset)))
 
-
 (defun magit-gh--diff-pos/gh->magit (file gh-pos gh-diff-body)
   "Convert a Github diff position to a Magit diff position.
 
@@ -317,21 +328,23 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
     (save-excursion
       (insert gh-diff-body)
       (goto-char (point-min))
+      ;; FIXME: This regex isn't very robust
       (re-search-forward (format "+++ b/%s" file))
-      (re-search-forward "@@ -\\([0-9]+\\),\\([0-9]+\\) \\+\\([0-9]+\\),\\([0-9]+\\) @@")
+      (re-search-forward magit-gh--hunk-header-re)
       (forward-line gh-pos)
       (let ((rev (if (looking-at "^-") :a :b))
             (offset 0))
         (while (not (magit-gh--try-parse-hunk-header))
-          (assert (= 0 (forward-line -1)))
           (unless (or (and (eq rev :a) (looking-at "^\\+"))
                       (and (eq rev :b) (looking-at "^-")))
-            (cl-incf offset)))
+            (cl-incf offset))
+          (assert (= 0 (forward-line -1))))
         (make-magit-gh-diff-pos :a-or-b rev
                                 :hunk-start (alist-get
                                              (if (eq rev :a) :a-start :b-start)
                                              (magit-gh--try-parse-hunk-header))
-                                :offset (1- offset))))))
+                                :offset offset ;;(1- offset)
+                                )))))
 
 
 (defun magit-gh--current-section-content ()
@@ -416,27 +429,40 @@ which they came, add them to current magit-diff buffer."
 (defun magit-gh--refresh-comments ()
   "Refresh comments for the current PR."
   (interactive)
-  (let ((start-point (point))) ;; Why doesn't save-excursion work here??
-    (magit-gh--delete-comment-overlays)
-    (when (and (magit-gh--get-current-pr)
-               (derived-mode-p 'magit-diff-mode))
-      (-if-let* ((current-pr (magit-gh--get-current-pr))
-                 (comments (magit-gh--list-comments current-pr))
-                 (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
-          (magit-gh--display-comments comments gh-diff)))
-    (goto-char start-point)))
+  (when (derived-mode-p 'magit-diff-mode)
+    (with-current-buffer (current-buffer)
+      (save-excursion
+        (magit-gh--delete-comment-overlays)
+        (-if-let* ((current-pr (magit-gh--get-current-pr))
+                   (comments (magit-gh--list-comments current-pr))
+                   (gh-diff (magit-gh--fetch-diff-from-github current-pr)))
+            (magit-gh--display-comments comments gh-diff))))))
 
 ;; (remove-hook 'magit-post-refresh-hook #'magit-gh--refresh-comments)
-(add-hook 'magit-post-refresh-hook #'magit-gh--refresh-comments)
+(add-hook 'magit-refresh-buffer-hook #'magit-gh--refresh-comments)
+;; (defun magit-gh--save-point ()
+;;   (setq magit-gh--current-point (point)))
+;; (defun magit-gh--restore-point ()
+;;   (message "Returning back to %s from %s after save" magit-gh--current-point (point))
+;;   (goto-char magit-gh--current-point))
+;; (add-hook 'magit-pre-refresh-hook #'magit-gh--save-point)
+;; (remove-hook 'magit-post-refresh-hook #'magit-gh--restore-point)
+;; (remove-hook 'magit-unwind-refresh-hook #'magit-gh--restore-point)
+
 
 ;; Capture and store the associated PR when the user views its diff
 ;; from the magit Pull Requests section
 (defun capture-current-pull-request ()
-  (let ((section-val (magit-section-value (magit-current-section))))
-    (destructuring-bind (user proj id) section-val
-      (setq magit-gh--current-pr (make-magit-gh-pr :owner user
-                                                   :repo-name proj
-                                                   :pr-number id)))))
+  (let ((section-val (magit-section-value (magit-current-section)))
+        (pr-data (magit-gh-section-req-data)))
+    (cl-destructuring-bind (user proj id) section-val
+      (setq magit-gh--current-pr
+            (make-magit-gh-pr :owner user
+                              :repo-name proj
+                              :pr-number id
+                              :diff-range (concat (oref (oref pr-data :base) :sha)
+                                                  ".."
+                                                  (oref (oref pr-data :head) :sha)))))))
 
 (advice-add 'magit-gh-pulls-diff-pull-request :before #'capture-current-pull-request)
 
@@ -445,32 +471,81 @@ which they came, add them to current magit-diff buffer."
   (and (boundp 'magit-gh--current-pr)
        magit-gh--current-pr))
 
+(defun magit-gh--populate-reviews (pr)
+  "Populate and return the magit reviews buffer for the given PR."
+  (let ((buf-name (format "magit-pull-request: %s/%s"
+                          (magit-gh-pr-repo-name pr)
+                          (magit-gh-pr-pr-number pr))))
+    (when (get-buffer buf-name)
+      (kill-buffer buf-name))
+    (with-current-buffer (get-buffer-create buf-name)
+      (magit-insert-section (pull-request pr) ;; root
+        (magit-insert-section (summary)
+          (magit-insert-heading "FIXME - PR TITLE HERE"))
+        (let ((reviews (magit-gh--list-reviews pr))
+              (diff-body (magit-gh--fetch-diff-from-github pr)))
+          (dolist (review reviews)
+            (magit-insert-section (review review)
+              (magit-insert-heading (format "Review by %s"
+                                            (alist-get :author review)))
+              (when-let ((body (alist-get :body review)))
+                (insert body "\n"))
+              (dolist (comment (alist-get :comments review))
+                (magit-insert-section (comment comment)
+                  (insert (magit-gh--propertize-comment-ctx diff-body
+                                                            (magit-gh-pr-diff-range pr)
+                                                            comment))
+                  (insert "\n")
+                  (insert (alist-get :body comment))
+                  (insert "\n")
+                  (insert (format "- %s" (alist-get :author comment)))
+                  (insert "\n")))))))
+          (goto-char (point-min)))
+    (get-buffer buf-name)))
+
+(defun magit-gh--propertize-comment-ctx (diff-body diff-range comment)
+  (let* ((comment-ctx (magit-gh--comment-ctx
+                       diff-body
+                       (alist-get :position comment)
+                       (alist-get :path comment)))
+         (ctx-lines (split-string comment-ctx "\n"))
+         (i 0)
+         (in-hunk t)
+         result)
+    (dolist (line (reverse ctx-lines)
+                  (string-join result "\n"))
+      (setq in-hunk (and in-hunk
+                         (not (string-match-p magit-gh--hunk-header-re line))))
+      (setq result
+            (cons (if in-hunk
+                      (propertize line
+                                  'keymap
+                                  (let ((keymap (make-sparse-keymap)))
+                                    (define-key keymap (kbd "<return>")
+                                      (let ((gh-pos (- (alist-get :position comment) i)))
+                                        (lambda ()
+                                          (interactive)
+                                          (let ((magit-pos (magit-gh--diff-pos/gh->magit
+                                                            (alist-get :path comment)
+                                                            gh-pos
+                                                            diff-body)))
+                                            (magit-diff diff-range)
+                                            (magit-gh--visit-diff-pos (alist-get :path comment)
+                                                                      magit-pos)))))
+                                    keymap))
+                      line)
+                  result))
+      (setq i (1+ i)))))
+
+
+(defun magit-gh--jump-to-diff-for-comment ()
+  (interactive)
+  (magit-diff (magit-gh-pr-diff-range magit-gh--current-pr)))
+
+(defun magit-gh-show-reviews (&optional pr)
+  (interactive)
+  (switch-to-buffer (magit-gh--populate-reviews (or pr magit-gh--current-pr))))
+
 (provide 'magit-gh-comments)
-
-;;; BEGIN - Debugging utilities - delete me
-
-(defun magit-gh--comment-at-point ()
-  "Return the comment overlay at point, if it exists."
-  (car (-filter (lambda (ov) (and (overlay-get ov 'magit-gh-comment)
-                                  (>= (overlay-start ov) (point))
-                                  (<= (overlay-end ov) (point))))
-                (-flatten (overlay-lists)))))
-
-(defun overlays-at-point ()
-  "Return overlays which touch point.
-
-The start and end of the overlays are inclusive."
-  (interactive)
-  (filter (lambda (ov) (and (>= (point) (overlay-start ov))
-                            (<= (point) (overlay-end ov))))
-          (-flatten (overlay-lists))))
-
-
-(defun delete-overlays-at-point ()
-  (interactive)
-  (dolist (ov (overlays-at-point))
-    (delete-overlay ov)))
-
-;;; END - Debugging utilities - delete me
 
 ;;; magit-gh-comments.el ends here
