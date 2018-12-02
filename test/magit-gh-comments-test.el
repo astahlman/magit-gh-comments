@@ -101,9 +101,37 @@ def foo():
          (body . "A comment about the addition of line 15")
          (path . "f")
          (position . 9)
+         (user (login . "spiderman")))
+        ((pull_request_review_id . 43)
+         (body . "Some other comment that's been resolved")
+         (path . "f")
+         (position . nil)
+         (original_position . 10)
+         (original_commit_id . "abcdef")
          (user (login . "spiderman")))))
 
-(setq magit-gh--test-diff-body "diff --git a/f b/f
+(setq
+
+ ;; HEAD~1
+ magit-gh--test-diff-body-prev-commit "diff --git a/f b/f
+index 9fda99d..abcdef 100644
+--- a/f
++++ b/f
+@@ -1,3 +1,2 @@
+ 1. :a/1/1, :b/1/1
+-2. :a/1/2
+ 3. :a/1/3, :b/1/2
+@@ -11,3 +10,5 @@
+ 11. :a/11/1, :b/10/1
+ 12. :a/11/2, :b/10/2
++13. :b/10/3
+ 14. :a/11/3, :b/10/4
++15. :b/10/5
++16. :b/10/6 (this line will be deleted in the next commit)
+\\ No newline at end of file
+"
+ ;; HEAD
+ magit-gh--test-diff-body "diff --git a/f b/f
 index 9fda99d..f88549a 100644
 --- a/f
 +++ b/f
@@ -131,6 +159,8 @@ index 9fda99d..f88549a 100644
                ;;(equalp request-args )
               t)
          magit-gh--test-diff-body)
+        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/commits/abcdef")
+         magit-gh--test-diff-body-prev-commit)
         (t (error "There is no mock configured for that request with URL `%s`" url))))
 
 (ert-deftest test-magit-gh--github-fetch-reviews ()
@@ -143,22 +173,99 @@ index 9fda99d..f88549a 100644
       (should (string-match-p "This is a top-level review"
                               (alist-get :body first-review))))))
 
+(defun magit-gh--discard-empty-keys (l)
+  (let (result)
+    (dolist (pair l result)
+      (when (cdr pair)
+        (setq result (cons pair result))))))
+
+
+(defun alist-equal-p (a1 a2)
+  (letfn ((k-str (lambda (a)
+                   (if (symbolp a)
+                       (symbol-name a)
+                     (string a)))))
+    (cond ((and (not a1) (not a2))
+           t)
+          ((and (atom a1) (atom a2))
+           (equal a1 a2))
+          ((and (listp a1) (listp a2)
+                (atom (cdr a1)) (atom (cdr a2)))
+           (and (alist-equal-p (car a1) (car a2))
+                (alist-equal-p (cdr a1) (cdr a2))))
+          ((and (listp a1) (listp a2))
+           (let ((s1 (sort a1 (lambda (p1 p2) (string< (k-str (car p1)) (k-str (car p2))))))
+                 (s2 (sort a2 (lambda (p1 p2) (string< (k-str (car p1)) (k-str (car p2)))))))
+             (and (alist-equal-p (car s1) (car s2))
+                  (alist-equal-p (cdr s1) (cdr s2)))))
+          (t nil))))
+
+(defun alist-equal-p (a1 a2)
+  (letfn ((alistp (lambda (x) (and (listp x) (-every? #'listp x)))))
+    (cond ((equal a1 a2) t)
+          ((and (alistp a1) (alistp a2))
+           (catch 'not-equal
+             (and
+              (dolist (kv a1 t)
+                (unless (alist-equal-p (alist-get (car kv) a1)
+                                       (alist-get (car kv) a2))
+                  (throw 'not-equal nil)))
+              (dolist (kv a2 t)
+                (unless (alist-equal-p (alist-get (car kv) a1)
+                                       (alist-get (car kv) a2))
+                  (throw 'not-equal nil))))))
+          (t nil))))
+
+(ert-deftest test-alist-equal-p ()
+  "Test of our test infrastructure"
+  (should (alist-equal-p '((:a . 1) (:b . 2))
+                         '((:b . 2) (:a . 1))))
+  (should (not (alist-equal-p '((:a . 2) (:b . 1))
+                              '((:a . 1) (:b . 2)))))
+  (should (alist-equal-p '((:a . 1) (:b . 2))
+                         '((:b . 2) (:a . 1) (:c . nil))))
+  (should (not (alist-equal-p '((:a . 1) (:b . 2))
+                              '((:b . 2) (:a . 1) (:c . 3)))))
+  (should (alist-equal-p '((:a . 1) (:b . (1 2 3)))
+                         '((:b . (1 2 3)) (:a . 1))))
+  (should (not (alist-equal-p '((:a . 1) (:b . (1 2 3 "foo")))
+                              '((:b . (1 2 3)) (:a . 1)))))
+  (should (alist-equal-p '((:a . 1) (:b . (1 2 3 "foo")))
+                               '((:b . (1 2 3 "foo")) (:a . 1)))))
 
 (ert-deftest test-magit-gh--github-fetch-comments ()
   ;; TODO: Test against the comment context given this diff body
-  (let* ((diff-body magit-gh--test-diff-body))
+  (let* ((diff-body magit-gh--test-diff-body)
+         (sort-pred (lambda (x y)
+                      (if (equal (alist-get :pull_request_review_id x)
+                                 (alist-get :pull_request_review_id y))
+                          (string< (alist-get :body x)
+                                   (alist-get :body y))
+                        (< (alist-get :pull_request_review_id x)
+                           (alist-get :pull_request_review_id y)))))
+         (retrieved-comments (sort (mapcar #'magit-gh--discard-empty-keys
+                                           (magit-gh--list-comments magit-gh--test-pr))
+                                   sort-pred))
+         (expected-comments '(((:pull_request_review_id . 42)
+                               (:author . "astahlman")
+                               (:body . "A comment about the removal of line 2")
+                               (:path . "f")
+                               (:position . 2))
+                              ((:pull_request_review_id . 43)
+                               (:author . "spiderman")
+                               (:body . "A comment about the addition of line 15")
+                               (:path . "f")
+                               (:position . 9))
+                              ((:pull_request_review_id . 43)
+                               (:author . "spiderman")
+                               (:body . "Some other comment that's been resolved")
+                               (:path . "f")
+                               (:is_outdated . t)
+                               (:original_position . 10)
+                               (:original_commit_id . "abcdef")))))
     (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
-                (should (equal '(((:pull_request_review_id . 42)
-                                  (:author . "astahlman")
-                                  (:body . "A comment about the removal of line 2")
-                                  (:path . "f")
-                                  (:position . 2))
-                                 ((:pull_request_review_id . 43)
-                                  (:author . "spiderman")
-                                  (:body . "A comment about the addition of line 15")
-                                  (:path . "f")
-                                  (:position . 9)))
-                               (magit-gh--list-comments magit-gh--test-pr))))))
+      (should (= (length expected-comments) (length retrieved-comments)))
+      (should (cl-every #'alist-equal-p expected-comments retrieved-comments)))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
@@ -217,6 +324,7 @@ index 9fda99d..f88549a 100644
 
 (ert-deftest magit-gh--test-populate-reviews-buffer ()
   (let ((magit-gh--current-pr magit-gh--test-pr)
+        (expected-buf-name "magit-gh-comments: magit-gh-comments/0")
         magit-diff-calls
         visit-diff-pos-calls)
     (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
@@ -226,8 +334,9 @@ index 9fda99d..f88549a 100644
                  (magit-gh--visit-diff-pos (lambda (&rest args)
                                              (setq visit-diff-pos-calls
                                                    (cons args visit-diff-pos-calls)))))
-      (magit-gh--populate-reviews magit-gh--test-pr)
-      (switch-to-buffer "magit-pull-request: magit-gh-comments/0")
+      (when-let ((buf (get-buffer expected-buf-name)))
+        (kill-buffer buf))
+      (magit-gh-show-reviews magit-gh--test-pr)
       (goto-char (point-min))
       (should (magit-gh--looking-at-p "FIXME - PR TITLE HERE"))
       ;; Review sections
@@ -236,13 +345,14 @@ index 9fda99d..f88549a 100644
       (should (s-contains? "This is a top-level review"
                            (magit-gh--section-content-as-string)))
       (magit-section-forward)
-      (should (magit-gh--looking-at-p "f
-@@ -1,3 +1,2 @@
- 1. :a/1/1, :b/1/1
--2. :a/1/2
+      (should (magit-gh--looking-at-p "Comment at .+
+f
+@@ -1,3 \\+1,2 @@
+ 1\\. :a/1/1, :b/1/1
+-2\\. :a/1/2
 A comment about the removal of line 2
 - astahlman"))
-      (forward-line 3)
+      (forward-line 4)
       (should (magit-gh--looking-at-p "-2. :a/1/2"))
       (save-excursion
         (execute-kbd-macro (kbd "<return>"))
@@ -255,15 +365,27 @@ A comment about the removal of line 2
       (magit-section-forward-sibling)
       (should (magit-gh--looking-at-p "Review by spiderman"))
       (magit-section-forward)
-      (should (magit-gh--looking-at-p "f
- 12. :a/11/2, :b/10/2
-+13. :b/10/3
- 14. :a/11/3, :b/10/4
-+15. :b/10/5
+      (should (oref (magit-current-section) hidden))
+      (magit-section-toggle (magit-current-section))
+      (should (magit-gh--looking-at-p "\\[Outdated\\] Comment at .+
+f
+\\+13\\. :b/10/3
+ 14\\. :a/11/3, :b/10/4
+\\+15\\. :b/10/5
+\\+16\\. :b/10/6 (this line will be deleted in the next commit)
+Some other comment that's been resolved
+- spiderman"))
+      (magit-section-forward)
+      (should (magit-gh--looking-at-p "Comment at .+
+f
+ 12\\. :a/11/2, :b/10/2
+\\+13\\. :b/10/3
+ 14\\. :a/11/3, :b/10/4
+\\+15\\. :b/10/5
 A comment about the addition of line 15
 - spiderman"))
-      (forward-line 4)
-      (should (magit-gh--looking-at-p "+15. :b/10/5"))
+      (forward-line 5)
+      (should (magit-gh--looking-at-p "\\+15\\. :b/10/5"))
       (save-excursion
         (execute-kbd-macro (kbd "<return>"))
         (should (equal (car visit-diff-pos-calls)

@@ -92,6 +92,12 @@ function returns."
                           :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
                                      ("Accept" . "application/vnd.github.v3.diff"))))
 
+(defun magit-gh--fetch-diff-for-commit-from-github (sha)
+  (magit-gh--request-sync (format "https://api.github.com/repos/astahlman/magit-gh-comments/commits/%s" sha)
+                          :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
+                                     ("Accept" . "application/vnd.github.v3.diff"))))
+
+
 ;; TODO: Make an integration test out of this:
 ;; (magit-gh--fetch-diff-from-github magit-gh-comment-test-pr)
 
@@ -199,10 +205,13 @@ element of the result is an alist with the following keys:
                     :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
                     :parser #'magit-gh--parse-json-array))
          (comments (mapcar (lambda (comment)
-                             (magit-gh--alist-filter '(:pull_request_review_id (:user login) :body :path :position)
+                             (magit-gh--alist-filter '(:pull_request_review_id (:user login) :body :path :position :original_position :original_commit_id)
                                                      comment))
                            comments))
-         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment 'login :author)) comments)))
+         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment 'login :author)) comments))
+         (comments (mapcar (lambda (comment)
+                             (add-to-list 'comment `(:is_outdated . ,(not (alist-get :position comment)))))
+                           comments)))
     ;; review-id -> ((:comments ...) (:id . $id) (:body . $body) (:author . $user))
     (let* ((reviews (-group-by (-partial #'alist-get :id) reviews))
            ;; alist values are list of lists - unnest them as a single list

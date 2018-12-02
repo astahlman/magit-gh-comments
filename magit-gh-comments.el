@@ -40,6 +40,18 @@
 (require 'magit-gh-comments-github)
 (require 'magit-gh-comments-diff)
 
+
+(defvar magit-gh-comments-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map magit-mode-map)
+    (define-key map "k" 'magit-gh-add-comment)
+    map)
+  "Keymap for `magit-gh-comments-mode'.")
+
+(define-derived-mode magit-gh-comments-mode magit-mode "Magit Github Comments"
+  "Mode for looking at a Github Pull Request."
+  :group 'magit-gh-comments)
+
 ;; - A-OR-B is the revision we're looking at, :a or :b (old or new)
 ;; - HUNK-START corresponds to the number in the hunk-header
 ;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
@@ -115,7 +127,10 @@ magit-gh-diff-pos POS in the section for FILE."
             (unless (looking-at
                      (format "^%s" (if (eq :a rev) "\\+" "-")))
               (cl-incf i)))))
-    (error "Could not find a hunk that contains magit-position [%s]" pos)))
+    ;; TODO: Decide how to handle this. Reducing from `error' to
+    ;; `warn' for now because it keeps blocking my normal git workflow
+    ;; during `magit-refresh'
+    (warn "Could not find a hunk that contains magit-position [%s]" pos)))
 
 (defun magit-gh--try-parse-hunk-header (&optional line)
   "Try to parse the current LINE as a hunk-header.
@@ -369,6 +384,7 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
                                github-pos
                                comment-text)))
 
+;; TODO: Move this into our own keymap
 (magit-define-popup-action 'magit-gh-pulls-popup
   ?k "Comment on line at point" #'magit-gh-add-comment)
 
@@ -441,63 +457,79 @@ which they came, add them to current magit-diff buffer."
 (add-hook 'magit-refresh-buffer-hook #'magit-gh--refresh-comments)
 ;; (remove-hook 'magit-refresh-buffer-hook #'magit-gh--refresh-comments)
 
-;; Capture and store the associated PR when the user views its diff
-;; from the magit Pull Requests section
-(defun capture-current-pull-request ()
+(defun magit-gh--capture-current-pull-request ()
+  "Create a magit-gh-pr from the PR at point.
+
+Assumes we are in a magit-status buffer in the `Pull Requests'
+section, looking at a section of type `pull' (created by
+magit-gh-pulls)"
   (let ((section-val (magit-section-value (magit-current-section)))
         (pr-data (magit-gh-section-req-data)))
     (cl-destructuring-bind (user proj id) section-val
-      (setq magit-gh--current-pr
-            (make-magit-gh-pr :owner user
-                              :repo-name proj
-                              :pr-number id
-                              :diff-range (concat (oref (oref pr-data :base) :sha)
-                                                  ".."
-                                                  (oref (oref pr-data :head) :sha)))))))
-
-(advice-add 'magit-gh-pulls-diff-pull-request :before #'capture-current-pull-request)
+      (make-magit-gh-pr :owner user
+                        :repo-name proj
+                        :pr-number id
+                        :diff-range (concat (oref (oref pr-data :base) :sha)
+                                            ".."
+                                            (oref (oref pr-data :head) :sha))))))
 
 (defun magit-gh--get-current-pr ()
   "Return the Pull Request or nil, if not set."
   (and (boundp 'magit-gh--current-pr)
        magit-gh--current-pr))
 
+(defun magit-gh-comments-refresh-buffer (pr &rest _refresh-args)
+  ;; We'll need a reference to the PR in our magit-diff refresh hook
+  (setq magit-gh--current-pr pr)
+  (magit-gh--populate-reviews pr))
+
 (defun magit-gh--populate-reviews (pr)
   "Populate and return the magit reviews buffer for the given PR."
-  (let ((buf-name (format "magit-pull-request: %s/%s"
-                          (magit-gh-pr-repo-name pr)
-                          (magit-gh-pr-pr-number pr))))
-    (when (get-buffer buf-name)
-      (kill-buffer buf-name))
-    (with-current-buffer (get-buffer-create buf-name)
-      (magit-insert-section (pull-request pr) ;; root
-        (magit-insert-section (summary)
-          (magit-insert-heading "FIXME - PR TITLE HERE"))
-        (let ((reviews (magit-gh--list-reviews pr))
-              (diff-body (magit-gh--fetch-diff-from-github pr)))
-          (dolist (review reviews)
-            (magit-insert-section (review review)
-              (magit-insert-heading (format "Review by %s"
-                                            (alist-get :author review)))
-              (when-let ((body (alist-get :body review)))
-                (insert body "\n"))
-              (dolist (comment (alist-get :comments review))
-                (magit-insert-section (comment comment)
-                  (insert (magit-gh--propertize-comment-ctx diff-body
-                                                            (magit-gh-pr-diff-range pr)
-                                                            comment))
-                  (insert "\n")
-                  (insert (alist-get :body comment))
-                  (insert "\n")
-                  (insert (format "- %s" (alist-get :author comment)))
-                  (insert "\n")))))))
-          (goto-char (point-min)))
-    (get-buffer buf-name)))
+  (magit-insert-section (pull-request pr) ;; root
+    (magit-insert-section (summary)
+      (magit-insert-heading "FIXME - PR TITLE HERE"))
+    (let ((reviews (magit-gh--list-reviews pr))
+          (diff-body (magit-gh--fetch-diff-from-github pr)))
+      (dolist (review reviews)
+        (magit-insert-section (review review)
+          (magit-insert-heading (format "Review by %s"
+                                        (alist-get :author review)))
+          (when-let ((body (alist-get :body review)))
+            (insert body "\n"))
+          (dolist (comment (alist-get :comments review))
+            (magit-insert-section (comment comment (alist-get :is_outdated comment))
+              (magit-insert-heading (format "%sComment at %s"
+                                            (if (alist-get :is_outdated comment)
+                                                "[Outdated] "
+                                              "")
+                                            "<timestamp>"))
+              (insert (magit-gh--propertize-comment-ctx diff-body
+                                                        (magit-gh-pr-diff-range pr)
+                                                        comment))
+              (insert "\n")
+              (insert (alist-get :body comment))
+              (insert "\n")
+              (insert (format "- %s" (alist-get :author comment)))
+              (insert "\n")))))))
+  (goto-char (point-min))
+  (current-buffer))
 
 (defun magit-gh--propertize-comment-ctx (diff-body diff-range comment)
-  (let* ((comment-ctx (magit-gh--comment-ctx
-                       diff-body
+  (let* ((diff-body (if (not (alist-get :is_outdated comment))
+                        diff-body
+                      (magit-gh--fetch-diff-for-commit-from-github
+                       (alist-get :original_commit_id comment))))
+         (diff-range (if (not (alist-get :is_outdated comment))
+                         diff-range
+                       (let ((base-sha (car (split-string diff-range "\\.\\.")))
+                             (original-head-sha (substring (alist-get :original_commit_id comment) 0 6)))
+                         (format "%s..%s" base-sha original-head-sha))))
+         (position (if (not (alist-get :is_outdated comment))
                        (alist-get :position comment)
+                     (alist-get :original_position comment)))
+         (comment-ctx (magit-gh--comment-ctx
+                       diff-body
+                       position
                        (alist-get :path comment)))
          (ctx-lines (split-string comment-ctx "\n"))
          (i 0)
@@ -513,7 +545,7 @@ which they came, add them to current magit-diff buffer."
                                   'keymap
                                   (let ((keymap (make-sparse-keymap)))
                                     (define-key keymap (kbd "<return>")
-                                      (let ((gh-pos (- (alist-get :position comment) i)))
+                                      (let ((gh-pos (- position i)))
                                         (lambda ()
                                           (interactive)
                                           (let ((magit-pos (magit-gh--diff-pos/gh->magit
@@ -524,7 +556,7 @@ which they came, add them to current magit-diff buffer."
                                             (magit-gh--visit-diff-pos (alist-get :path comment)
                                                                       magit-pos)))))
                                     keymap))
-                      line)
+                    line)
                   result))
       (setq i (1+ i)))))
 
@@ -553,13 +585,27 @@ which they came, add them to current magit-diff buffer."
                                          (point))))
                (format "%s\n%s" file (buffer-substring beg end)))))))
 
+(defun magit-gh-comments--lock-value (pr &rest _args)
+  "Uses the PR as the unique identifier for this magit buffer.
+See also `magit-buffer-lock-functions'."
+  pr)
+
+(push (cons 'magit-gh-comments-mode #'magit-gh-comments--lock-value)
+      magit-buffer-lock-functions)
+
+(defun magit-gh-comments--buffer-name (mode lock-value)
+  (let ((pr lock-value)
+        (mode-name (cadr (s-match "\\(.+\\)-mode" (symbol-name mode)))))
+    (format "%s: %s/%s"
+            mode-name
+            (magit-gh-pr-repo-name pr)
+            (magit-gh-pr-pr-number pr))))
+
 (defun magit-gh-show-reviews (&optional pr)
   (interactive)
-  ;; TODO: Do we still need magit-gh--current-pr as a global variable,
-  ;; now that we have overridden the keymap to use our own function
-  ;; instead of advising the one from magit-gh-pulls?
-  (capture-current-pull-request)
-  (switch-to-buffer (magit-gh--populate-reviews (or pr magit-gh--current-pr))))
+  (let ((pr (or pr (magit-gh--capture-current-pull-request)))
+        (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
+    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr) t)))
 
 (provide 'magit-gh-comments)
 

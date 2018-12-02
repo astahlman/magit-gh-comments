@@ -9,7 +9,7 @@ Unlike `looking-at-p', on failure this function reports the
 actual string at point. This makes it easier to diagnose test
 failures.
 "
-  (let ((result (looking-at-p (regexp-quote s))))
+  (let ((result (looking-at-p s)))
     (if (not result)
         (error (format "Expected to be looking at: %s\nActually looking at: %s"
                        s
