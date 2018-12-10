@@ -513,7 +513,10 @@ magit-gh-pulls)"
                                     (magit-gh-pr-title pr)
                                     (magit-gh-pr-pr-number pr)
                                     (upcase (magit-gh-pr-state pr))))
-      (insert "\n" (magit-gh-pr-body pr) "\n\n"))
+      (insert "\n"
+              (or
+               (and (not (string-empty-p (magit-gh-pr-body pr))) (magit-gh-pr-body pr))
+               (propertize "No description provided" 'face 'italic)) "\n\n"))
     (magit-insert-section (diffstat)
       (magit-insert-heading "Files changed")
       (insert "\n")
