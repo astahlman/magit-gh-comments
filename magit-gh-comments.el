@@ -501,7 +501,7 @@ magit-gh-pulls)"
 
 (defun magit-gh-comments-refresh-buffer (pr &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
-  (setq magit-gh--current-pr pr)
+  (setq-local magit-gh--current-pr pr)
   (magit-gh--hydrate-pr-from-github pr)
   (magit-gh--populate-reviews pr))
 

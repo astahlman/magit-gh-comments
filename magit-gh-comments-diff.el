@@ -51,10 +51,12 @@ match and the match's length is returned."
         (let ((keymap (make-sparse-keymap)))
           (define-key keymap (kbd "<return>")
             (let ((filepath filepath)
-                  (diff-range diff-range))
+                  (diff-range diff-range)
+                  (pr (magit-gh--get-current-pr)))
               (lambda ()
                 (interactive)
                 (magit-diff diff-range)
+                (setq-local magit-gh--current-pr pr)
                 (if-let ((section (magit-get-section
                                    `((file . ,filepath) (diffbuf)))))
                     (progn
