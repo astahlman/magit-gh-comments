@@ -140,7 +140,8 @@ index 9fda99d..f88549a 100644
 
 
 (setq magit-gh--test-pr-response
-      '((body . "Fake PR description here")
+      '((body . "Fake PR description here
+With a carriage-return + line-feed.")
         (title . "PR Title")
         (state . "open")))
 
@@ -151,7 +152,7 @@ index 9fda99d..f88549a 100644
          magit-gh--test-review-response)
         ((and (equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
               (equalp "application/vnd.github.v3.diff"
-                      (cdr (assoc "Accept" (plist-get request-args :headers)))))
+                      (magit-gh--extract-header "Accept" request-args)))
          magit-gh--test-diff-body)
         ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
          magit-gh--test-pr-response)
@@ -346,7 +347,8 @@ index 9fda99d..f88549a 100644
       ;; PR Title and description
       (should (magit-gh--looking-at-p (regexp-quote "PR Title (#0) [OPEN]")))
       (forward-line 2)
-      (should (magit-gh--looking-at-p "Fake PR description here"))
+      (should (magit-gh--looking-at-p (regexp-quote "Fake PR description here
+With a carriage-return + line-feed.")))
       ;; Diffstat
       (magit-section-forward)
       (should (magit-gh--looking-at-p "Files changed"))

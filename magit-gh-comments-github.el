@@ -53,8 +53,29 @@
                                     http-result)
                            http-result))))
        (if (listp response)
-           (magit-gh--keys->keywords response)
+           (magit-gh--remove-carriage-returns
+            (magit-gh--keys->keywords response))
          response)))
+
+(defun magit-gh--remove-carriage-returns (l)
+  "Recursively remove ^M from any strings in list L"
+  (cond
+   ((not l) nil)
+   ((stringp l) (s-replace "" "" l))
+   ((consp l) (cons (magit-gh--remove-carriage-returns (car l))
+                    (magit-gh--remove-carriage-returns (cdr l))))
+   (t l)))
+
+(ert-deftest test-magit-gh--remove-carriage-returns ()
+  (should (equal (magit-gh--remove-carriage-returns "foo\nbar")
+                 "foo\nbar"))
+  (should (equal (magit-gh--remove-carriage-returns '((:a . 1) (:b . "foo\nbar")))
+                 '((:a . 1) (:b . "foo\nbar"))))
+  (should (equal (magit-gh--remove-carriage-returns '(2 ("ab" . "foo\nbar")))
+                 '(2 ("ab" . "foo\nbar"))))
+  (should (equal (magit-gh--remove-carriage-returns "foobar") "foobar"))
+  (should (not (equal (magit-gh--remove-carriage-returns "foobar") "foobar"))))
+
 
 (cl-defun magit-gh--request-sync-internal (url &rest request-args
                                                &key
@@ -93,6 +114,9 @@ function returns."
       (if err-code
           (error "Error fetching from %s [%s]: %s" url err-code result)
         result))))
+
+(defun magit-gh--extract-header (key request-args)
+  (cdr (assoc key (plist-get request-args :headers))))
 
 (defun magit-gh--hydrate-pr-from-github (pr)
   "Hydrate PR with additional fields fetched from Github.
