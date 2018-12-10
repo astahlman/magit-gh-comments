@@ -54,17 +54,7 @@ index 9fda99d..f88549a 100644
 ;; 4. Assert that the comment is present on line L
 
 
-(defmacro with-mocks (fn-defs &rest body)
-  (declare (indent 1) (debug ((&rest (sexp function-form)) body)))
-  (let ((bindings (mapcar
-                   (lambda (fn-def) `((symbol-function (quote ,(car fn-def))) ,(cadr fn-def)))
-                   fn-defs)))
-    `(cl-letf ,bindings
-       ,@body)))
-
-;; TODO: Move this definition out of the test, maybe reverse the
-;; direction of the alias (or just remove it)
-(defalias 'letfn #'with-mocks)
+(defalias 'with-mocks #'letfn)
 
 (setq magit-gh--test-pr
       (make-magit-gh-pr :owner "astahlman"
@@ -149,16 +139,23 @@ index 9fda99d..f88549a 100644
 ")
 
 
+(setq magit-gh--test-pr-response
+      '((body . "Fake PR description here")
+        (title . "PR Title")
+        (state . "open")))
+
 (defun mock-github-api (url &rest request-args)
   (cond ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/comments")
          magit-gh--test-comments-response)
-        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/reviews")
+        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/reviews") ()
          magit-gh--test-review-response)
         ((and (equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
-               ;; TODO: check that the args contain `:headers ("Accept" . "application/vnd.github.v3.diff")`
-               ;;(equalp request-args )
-              t)
+              (equalp "application/vnd.github.v3.diff"
+                      (alist-get "Accept" (plist-get request-args :headers) nil nil #'equalp)))
          magit-gh--test-diff-body)
+        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
+         magit-gh--test-pr-response)
+
         ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/commits/abcdef")
          magit-gh--test-diff-body-prev-commit)
         (t (error "There is no mock configured for that request with URL `%s`" url))))
@@ -322,7 +319,9 @@ index 9fda99d..f88549a 100644
                      (magit-gh--comment-ctx diff-body 5 "f"))))
     (should-error (magit-gh--comment-ctx diff-body 4 "f"))))
 
+
 (ert-deftest magit-gh--test-populate-reviews-buffer ()
+  (setq magit-gh--request-cache nil)
   (let ((magit-gh--current-pr magit-gh--test-pr)
         (expected-buf-name "magit-gh-comments: magit-gh-comments/0")
         magit-diff-calls
@@ -331,6 +330,12 @@ index 9fda99d..f88549a 100644
                  (magit-diff (lambda (&rest args)
                                (setq magit-diff-calls
                                      (cons args magit-diff-calls))))
+                 (magit-git-insert (lambda (&rest args)
+                                     ;; TODO: a dedent function would be nice, here
+                                     (insert (s-dedent "\
+                                                a                |  5 +++--
+                                                another-file     |  7 +++++++
+                                                2 files changed, 10 insertions(+), 2 deletions(-)") )))
                  (magit-gh--visit-diff-pos (lambda (&rest args)
                                              (setq visit-diff-pos-calls
                                                    (cons args visit-diff-pos-calls)))))
@@ -338,7 +343,20 @@ index 9fda99d..f88549a 100644
         (kill-buffer buf))
       (magit-gh-show-reviews magit-gh--test-pr)
       (goto-char (point-min))
-      (should (magit-gh--looking-at-p "FIXME - PR TITLE HERE"))
+      ;; PR Title and description
+      (should (magit-gh--looking-at-p (regexp-quote "PR Title (#0) [OPEN]")))
+      (forward-line 2)
+      (should (magit-gh--looking-at-p "Fake PR description here"))
+      ;; Diffstat
+      (magit-section-forward)
+      (should (magit-gh--looking-at-p "Files changed"))
+      (magit-section-forward)
+      (should (magit-gh--looking-at-p (s-dedent "\
+                                        [0-9]+ files changed, [0-9]+ insertions(\\+), [0-9]+ deletions(-)
+                                        \\([a-zA-Z-/]+ +| +[0-9] [+-]+
+                                        ?\\)+")))
+      (magit-section-forward) ;; file1
+      (magit-section-forward) ;; file2
       ;; Review sections
       (magit-section-forward)
       (should (magit-gh--looking-at-p "Review by astahlman"))

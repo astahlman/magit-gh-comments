@@ -7,7 +7,14 @@
 
 ;; https://developer.github.com/v3/pulls/#list-pull-requests
 ;; TODO: Add title, body, and state (at a minimum)
-(defstruct magit-gh-pr owner repo-name pr-number diff-range)
+(defstruct magit-gh-pr
+  owner
+  repo-name
+  pr-number
+  diff-range
+  title
+  state
+  body)
 
 (setq request-message-level 'debug)
 (setq request-log-level 'debug)
@@ -39,15 +46,15 @@
 ;; TODO: Put this back, just don't want to wipe out my cache without wifi
 (setq magit-gh--request-cache nil)
 (cl-defun magit-gh--request-sync (url &rest request-args)
-  (let ((response (or (cdr (assoc (list url request-args) magit-gh--request-cache))
-                      (let ((http-result (apply #'magit-gh--request-sync-internal url request-args)))
-                        (map-put magit-gh--request-cache
-                                 (list url request-args)
-                                 http-result)
-                        http-result))))
-    (if (listp response)
-        (magit-gh--keys->keywords response)
-      response)))
+   (let ((response (or (cdr (assoc (list url request-args) magit-gh--request-cache))
+                         (let ((http-result (apply #'magit-gh--request-sync-internal url request-args)))
+                           (map-put magit-gh--request-cache
+                                    (list url request-args)
+                                    http-result)
+                           http-result))))
+       (if (listp response)
+           (magit-gh--keys->keywords response)
+         response)))
 
 (cl-defun magit-gh--request-sync-internal (url &rest request-args
                                                &key
@@ -87,14 +94,26 @@ function returns."
           (error "Error fetching from %s [%s]: %s" url err-code result)
         result))))
 
+(defun magit-gh--hydrate-pr-from-github (pr)
+  "Hydrate PR with additional fields fetched from Github.
+
+This function modifies and returns its input."
+  (let ((response (magit-gh--request-sync (magit-gh--url-for-pr pr)
+                                          :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
+                                          :parser #'json-read)))
+    (setf (magit-gh-pr-body pr) (alist-get :body response))
+    (setf (magit-gh-pr-title pr) (alist-get :title response))
+    (setf (magit-gh-pr-state pr) (alist-get :state response))
+    pr))
+
 (defun magit-gh--fetch-diff-from-github (pr)
   (magit-gh--request-sync (magit-gh--url-for-pr pr)
-                          :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
+                          :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
                                      ("Accept" . "application/vnd.github.v3.diff"))))
 
 (defun magit-gh--fetch-diff-for-commit-from-github (sha)
   (magit-gh--request-sync (format "https://api.github.com/repos/astahlman/magit-gh-comments/commits/%s" sha)
-                          :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token)))
+                          :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
                                      ("Accept" . "application/vnd.github.v3.diff"))))
 
 
@@ -156,21 +175,37 @@ element of the result is an alist with the following keys:
  (let ((json-array-type 'list))
    (json-read-array)))
 
-(defun magit-gh--keys->keywords (alist)
-  "Transform the keys in ALIST into colon-prefixed symbols."
-    (cl-flet ((sym-to-keyword (x)
-                              (intern (format ":%s" x)))
-              (alist-map-keys (fn alist)
-                              (let (result)
-                                (reverse
-                                 (dolist (cell alist result)
-                                   (setq result
-                                         (cons
-                                          (cons (funcall fn (car cell))
-                                                (cdr cell))
-                                          result)))))))
-        (mapcar (lambda (x) (alist-map-keys #'sym-to-keyword x))
-                alist)))
+(defun magit-gh--keys->keywords (l)
+  "Recursively transform the keys of the alists in L from strings or keywords
+to colon-prefixed keywords. L can be an alist or a list of alists."
+  (letfn ((simple-alistp (lambda (xs)
+                           (and (consp xs)
+                                (ignore-errors (-every? #'consp xs))
+                                (-every? (lambda (pair) (or (symbolp (car pair))
+                                                            (stringp (car pair)))) xs))))
+          (transform-dotted-pair (lambda (dp)
+                             (cons
+                              (intern (format ":%s" (car dp)))
+                              (magit-gh--keys->keywords (cdr dp))))))
+    (cond ((not l) nil)
+          ((atom l) l)
+          ((simple-alistp l) (mapcar 'transform-dotted-pair l))
+          (t (cons (magit-gh--keys->keywords (car l))
+                   (magit-gh--keys->keywords (cdr l)))))))
+
+(ert-deftest test-magit-gh--keys->keywords ()
+  ;; Simple alist
+  (should (equal (magit-gh--keys->keywords '(("a" . 1) ("b". 2)))
+                 '((:a . 1) (:b . 2))))
+  ;; List of alists
+  (should (equal (magit-gh--keys->keywords '((("a" . 1) ("b" . (("a1" . 2) ("b2" . (3 4)))))))
+                 '(((:a . 1) (:b . ((:a1 . 2) (:b2 . (3 4))))))))
+  ;; Nested alists
+  (should (equal (magit-gh--keys->keywords '(("a" . 1) ("b" . (("c" . 3)))))
+                 '((:a . 1) (:b . ((:c . 3))))))
+  ;; List of alists with nested alists
+  (should (equal (magit-gh--keys->keywords '((("a" . 1) ("b" . (("c" . 3))))))
+                 '(((:a . 1) (:b . ((:c . 3))))))))
 
 (defun magit-gh--alist-filter (keys alist)
   (-filter 'identity ;; remove nils
@@ -188,27 +223,26 @@ element of the result is an alist with the following keys:
 (defun magit-gh--alist-values (alist)
   (mapcar #'cdr alist))
 
-;; TODO: Refactor this to use magit-gh--response-parser?
 (defun magit-gh--list-reviews (pr)
   "Return a list of reviews on the given PR."
   (let* ((reviews (magit-gh--request-sync
                    (magit-gh--url-for-pr-reviews pr)
-                   :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
+                   :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                    :parser #'magit-gh--parse-json-array))
          (reviews (mapcar (lambda (review)
-                            (magit-gh--alist-filter '(:id (:user login) :body :state)
+                            (magit-gh--alist-filter '(:id (:user :login) :body :state)
                                                     review))
                           reviews))
-         (reviews (mapcar (lambda (review) (magit-gh--rename-key review 'login :author)) reviews))
+         (reviews (mapcar (lambda (review) (magit-gh--rename-key review :login :author)) reviews))
          (comments (magit-gh--request-sync
                     (magit-gh--url-for-pr-comments pr)
-                    :headers '(("Authorization" . (format "token %s" (magit-gh--get-oauth-token))))
+                    :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                     :parser #'magit-gh--parse-json-array))
          (comments (mapcar (lambda (comment)
-                             (magit-gh--alist-filter '(:pull_request_review_id (:user login) :body :path :position :original_position :original_commit_id)
+                             (magit-gh--alist-filter '(:pull_request_review_id (:user :login) :body :path :position :original_position :original_commit_id)
                                                      comment))
                            comments))
-         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment 'login :author)) comments))
+         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment :login :author)) comments))
          (comments (mapcar (lambda (comment)
                              (add-to-list 'comment `(:is_outdated . ,(not (alist-get :position comment)))))
                            comments)))
