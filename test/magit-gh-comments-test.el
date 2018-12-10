@@ -147,15 +147,14 @@ index 9fda99d..f88549a 100644
 (defun mock-github-api (url &rest request-args)
   (cond ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/comments")
          magit-gh--test-comments-response)
-        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/reviews") ()
+        ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0/reviews")
          magit-gh--test-review-response)
         ((and (equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
               (equalp "application/vnd.github.v3.diff"
-                      (alist-get "Accept" (plist-get request-args :headers) nil nil #'equalp)))
+                      (cdr (assoc "Accept" (plist-get request-args :headers)))))
          magit-gh--test-diff-body)
         ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/pulls/0")
          magit-gh--test-pr-response)
-
         ((equalp url "https://api.github.com/repos/astahlman/magit-gh-comments/commits/abcdef")
          magit-gh--test-diff-body-prev-commit)
         (t (error "There is no mock configured for that request with URL `%s`" url))))
@@ -240,8 +239,10 @@ index 9fda99d..f88549a 100644
                                    (alist-get :body y))
                         (< (alist-get :pull_request_review_id x)
                            (alist-get :pull_request_review_id y)))))
+         (retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
+                               (magit-gh--list-comments magit-gh--test-pr)))
          (retrieved-comments (sort (mapcar #'magit-gh--discard-empty-keys
-                                           (magit-gh--list-comments magit-gh--test-pr))
+                                           retrieved-comments)
                                    sort-pred))
          (expected-comments '(((:pull_request_review_id . 42)
                                (:author . "astahlman")
@@ -260,9 +261,8 @@ index 9fda99d..f88549a 100644
                                (:is_outdated . t)
                                (:original_position . 10)
                                (:original_commit_id . "abcdef")))))
-    (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
-      (should (= (length expected-comments) (length retrieved-comments)))
-      (should (cl-every #'alist-equal-p expected-comments retrieved-comments)))))
+    (should (= (length expected-comments) (length retrieved-comments)))
+    (should (cl-every #'alist-equal-p expected-comments retrieved-comments))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
