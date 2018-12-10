@@ -118,17 +118,34 @@ If SECTION is not supplied, use the value of
       (set-text-properties 0 (length result) nil result)
       result)))
 
+(defun s-dedent (s)
+  "Remove any common leading whitespace from every line in string S.
 
-(defmacro magit-gh--with-temp-buffer (&rest forms)
-  "Like `with-temp-buffer', but keep the buffer around for
-debugging during testing."
-  (declare (indent 0) (debug t))
-  `(if (ert-running-test)
-       (progn
-         (when (get-buffer "magit-gh-temp-buffer")
-           (kill-buffer "magit-gh-temp-buffer"))
-         (with-current-buffer (get-buffer-create "magit-gh-temp-buffer")
-           ,@forms))
-     (with-temp-buffer ,@forms)))
+Inspired by textwrap.dedent, in Python."
+  (let ((margin (apply #'min
+                       (mapcar (lambda (l)
+                                 (or (string-match "[^ ]+" l) 0))
+                               (s-lines s)))))
+    (s-join "\n"
+            (mapcar (lambda (l) (substring l margin))
+                    (s-lines s)))))
+
+(ert-deftest magit-gh--test-s-dedent ()
+  (should (equalp
+"foo
+bar"
+           (s-dedent "\
+                     foo
+                     bar")))
+  (should (equalp "\
+ foo
+  bar
+buzz"
+                  (s-dedent "\
+           foo
+            bar
+          buzz")))
+  (should (equalp "foo" (s-dedent "  foo")))
+  (should (equalp "foo" (s-dedent "foo"))))
 
 ;;; test-helper.el ends here

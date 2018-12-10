@@ -68,6 +68,27 @@
     (define-key map [remap magit-visit-thing]      'magit-gh-show-reviews)
     map))
 
+(defmacro letfn (fn-defs &rest body)
+  (declare (indent 1) (debug ((&rest (sexp function-form)) body)))
+  (let ((bindings (mapcar
+                   (lambda (fn-def) `((symbol-function (quote ,(car fn-def))) ,(cadr fn-def)))
+                   fn-defs)))
+    `(cl-letf ,bindings
+       ,@body)))
+
+
+(defmacro magit-gh--with-temp-buffer (&rest forms)
+  "Like `with-temp-buffer', but keep the buffer around for
+debugging during testing."
+  (declare (indent 0) (debug t))
+  `(if (ert-running-test)
+       (progn
+         (when (get-buffer "magit-gh-temp-buffer")
+           (kill-buffer "magit-gh-temp-buffer"))
+         (with-current-buffer (get-buffer-create "magit-gh-temp-buffer")
+           ,@forms))
+     (with-temp-buffer ,@forms)))
+
 (defun magit-gh--cur-diff-pos ()
   "Return the current, magit-style, position in the diff."
   (interactive)
@@ -481,13 +502,23 @@ magit-gh-pulls)"
 (defun magit-gh-comments-refresh-buffer (pr &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
   (setq magit-gh--current-pr pr)
+  (magit-gh--hydrate-pr-from-github pr)
   (magit-gh--populate-reviews pr))
 
 (defun magit-gh--populate-reviews (pr)
   "Populate and return the magit reviews buffer for the given PR."
   (magit-insert-section (pull-request pr) ;; root
     (magit-insert-section (summary)
-      (magit-insert-heading "FIXME - PR TITLE HERE"))
+      (magit-insert-heading (format "%s (#%s) [%s]"
+                                    (magit-gh-pr-title pr)
+                                    (magit-gh-pr-pr-number pr)
+                                    (upcase (magit-gh-pr-state pr))))
+      (insert "\n" (magit-gh-pr-body pr) "\n\n"))
+    (magit-insert-section (diffstat)
+      (magit-insert-heading "Files changed")
+      (insert "\n")
+      (magit-git-wash #'magit-gh--wash-diffstat "diff" "--stat" (magit-gh-pr-diff-range pr))
+      (insert "\n"))
     (let ((reviews (magit-gh--list-reviews pr))
           (diff-body (magit-gh--fetch-diff-from-github pr)))
       (dolist (review reviews)
