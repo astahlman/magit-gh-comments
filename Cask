@@ -7,6 +7,7 @@
 (depends-on "magit-gh-pulls" "0.5.3")
 (depends-on "request" "0.3.0")
 (depends-on "dash" "2.14.1")
+(depends-on "ht" "2.2")
 
 (development
  (depends-on "ert-runner"))

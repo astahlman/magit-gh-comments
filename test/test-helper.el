@@ -85,7 +85,7 @@ failures.
       (setq num-changes (how-many "^[-\\+]"))
       (re-search-forward "^[-\\+]\\(.+\\)" nil nil (1+ (random num-changes)))
       `((:line-contents . ,(match-string 1))
-        (:diff-pos . ,(magit-gh--cur-diff-pos))))))
+        (:diff-pos . ,(magit-gh--cur-magit-diff-pos))))))
 
 (defun magit-gh--line-contents-at-github-pos (n diff-buf)
   (with-current-buffer diff-buf

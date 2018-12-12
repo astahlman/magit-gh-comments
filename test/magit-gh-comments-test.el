@@ -412,3 +412,62 @@ A comment about the addition of line 15
                        `("f" ,(make-magit-gh-diff-pos :a-or-b :b
                                                       :hunk-start 10
                                                       :offset 5))))))))
+
+(ert-deftest magit-gh--test-fetch-review-draft ()
+  (let* ((saved-comment (make-magit-gh-comment :file "f"
+                                               :diff-pos (make-magit-gh-diff-pos :a-or-b :b
+                                                                                 :hunk-start 1
+                                                                                 :offset 2)
+                                               :text "This comment isn't submitted yet"))
+         (pending-review (make-magit-gh-review :body "I'm still working on this review"
+                                               :comments (list saved-comment))))
+    (magit-gh--store-review-draft pending-review magit-gh--test-pr)
+    (should (equal pending-review
+                   (magit-gh--get-review-draft magit-gh--test-pr)))))
+
+
+(defun magit-gh--simulate-adding-comments (comments)
+  (dolist (comment comments)
+    (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--cur-magit-diff-pos (lambda () (magit-gh-comment-diff-pos comment)))
+                 (magit-current-file (lambda () (magit-gh-comment-file comment)))
+                 (magit-diff--dwim (lambda () (magit-gh-pr-diff-range magit-gh--test-pr))))
+      (magit-gh-add-comment nil (magit-gh-comment-text comment)))))
+
+(setq magit-gh--test-comments
+      (let ((comment1 (make-magit-gh-comment :file "a"
+                                             :diff-pos (make-magit-gh-diff-pos :a-or-b :b
+                                                                               :hunk-start 1
+                                                                               :offset 2)
+                                             :text "Comment 1"))
+            (comment2 (make-magit-gh-comment :file "a"
+                                             :diff-pos (make-magit-gh-diff-pos :a-or-b :b
+                                                                               :hunk-start 1
+                                                                               :offset 2)
+                                             :text "Comment 2")))
+        (list comment1 comment2)))
+
+(ert-deftest magit-gh--test-add-pending-comments ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (magit-gh--simulate-adding-comments magit-gh--test-comments)
+  (should (equal (magit-gh-review-comments (magit-gh--get-review-draft magit-gh--test-pr))
+                 (reverse magit-gh--test-comments))))
+
+
+(ert-deftest magit-gh--test-submit-pending-comments ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (let (mock-calls)
+    (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--post-review (lambda (&rest args) (push args mock-calls))))
+      (magit-gh--simulate-adding-comments magit-gh--test-comments)
+      (magit-gh--submit-pending-review "Super-great job")
+      (should (equal (list magit-gh--test-pr
+                           (make-magit-gh-review :body "Super-great job"
+                                                 :comments (reverse magit-gh--test-comments)))
+                     (car mock-calls))))))
+
+(ert-deftest magit-gh--test-submission-rejected-if-empty ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
+    (should-error (magit-gh--submit-pending-review) :type 'user-error)))
+

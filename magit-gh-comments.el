@@ -37,6 +37,7 @@
 (require 'cl)
 (require 'dash)
 (require 'ert)
+(require 'ht)
 (require 'magit-gh-comments-github)
 (require 'magit-gh-comments-diff)
 
@@ -58,6 +59,12 @@
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
 (defstruct magit-gh-comment file diff-pos text)
+
+;; BODY is the top-level review text
+;; COMMENTS is a list of `magit-gh-comment's
+;; TODO: Should we use this data structure elsewhere?
+;; i.e., as the return value of `magit-gh--list-reviews'?
+(defstruct magit-gh-review body comments)
 
 
 ;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
@@ -89,8 +96,8 @@ debugging during testing."
            ,@forms))
      (with-temp-buffer ,@forms)))
 
-(defun magit-gh--cur-diff-pos ()
-  "Return the current, magit-style, position in the diff."
+(defun magit-gh--cur-magit-diff-pos ()
+  "Return the current, magit-style position in the diff."
   (interactive)
   (let* ((hunk-header (magit-gh--try-parse-hunk-header2)) ;; TODO: How will this handle new files?
          (rev (save-excursion (goto-char (line-beginning-position))
@@ -109,6 +116,14 @@ debugging during testing."
                               :hunk-start hunk-start
                               :offset offset))))
 
+(defun magit-gh--cur-github-diff-pos ()
+  "Return the current, Github-style position in the diff."
+  (interactive)
+  (let* ((magit-pos (magit-gh--cur-magit-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
+         (diff-body (magit-gh--fetch-diff-from-github (magit-gh--get-current-pr))))
+    (magit-gh--diff-pos/magit->gh (magit-current-file)
+                                  magit-pos
+                                  diff-body)))
 
 (defun magit-gh--visit-diff-pos (file pos)
   "Put point at the given position POS in a magit-diff buffer.
@@ -392,18 +407,32 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
 
 
 ;;;###autoload
-(defun magit-gh-add-comment (comment-text)
-  "Comment on the line at point and post COMMENT-TEXT to Github."
-  (interactive "MComment: ")
-  (let* ((magit-pos (magit-gh--cur-diff-pos)) ;; TODO: What if the line at point isn't part of a hunk/isn't changed by this diff?
-         (diff-body (magit-gh--fetch-diff-from-github (magit-gh--get-current-pr)))
-         (github-pos (magit-gh--diff-pos/magit->gh (magit-current-file) magit-pos diff-body))
-         (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
-    (magit-gh--post-pr-comment (magit-gh--get-current-pr)
-                               (magit-current-file) ;; FIXME: Add current-file to github-pos, get rid of this arg
-                               commit-sha
-                               github-pos
-                               comment-text)))
+(defun magit-gh-add-comment (arg comment-text)
+  "Comment on the line at point and post COMMENT-TEXT to Github.
+
+If called with a prefix arg, the comment is posted immediately to
+Github. Else, the comment is saved in a pending review."
+  (interactive "P\nMComment: ")
+  (let ((post-immediately arg)
+        (current-pr (magit-gh--get-current-pr)))
+    (if post-immediately
+        (let ((github-pos (magit-gh--cur-github-diff-pos))
+              (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
+          (magit-gh--post-pr-comment current-pr
+                                     (magit-current-file) ;; FIXME: Add current-file to github-pos, get rid of this arg
+                                     commit-sha
+                                     github-pos
+                                     comment-text))
+      ;; else, save this comment for later
+      (let ((magit-pos (magit-gh--cur-magit-diff-pos))
+            (comment (make-magit-gh-comment :file (magit-current-file)
+                                            :diff-pos (magit-gh--cur-magit-diff-pos)
+                                            :text comment-text))
+            (pending-review (or (magit-gh--get-review-draft current-pr)
+                                (make-magit-gh-review))))
+        (setf (magit-gh-review-comments pending-review)
+              (cons comment (magit-gh-review-comments pending-review)))
+        (magit-gh--store-review-draft pending-review current-pr)))))
 
 ;; TODO: Move this into our own keymap
 (magit-define-popup-action 'magit-gh-pulls-popup
@@ -640,6 +669,30 @@ See also `magit-buffer-lock-functions'."
   (let ((pr (or pr (magit-gh--capture-current-pull-request)))
         (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
     (magit-mode-setup-internal 'magit-gh-comments-mode (list pr) t)))
+
+;; Review drafts
+
+(defvar magit-gh--review-drafts (ht-create)
+  "Map of pending reviews: magit-gh-pr -> magit-gh-review")
+
+(defun magit-gh--store-review-draft (review pr)
+  (ht-set! magit-gh--review-drafts pr review))
+
+(defun magit-gh--get-review-draft (pr)
+  (ht-get magit-gh--review-drafts pr))
+
+(defun magit-gh--discard-review-draft (pr)
+  (ht-remove! magit-gh--review-drafts pr))
+
+(defun magit-gh--submit-pending-review (&optional body)
+  (let* ((pr (magit-gh--get-current-pr))
+         (review (magit-gh--get-review-draft pr))
+         (comments (and review (magit-gh-review-comments review))))
+    (when (not (or comments body))
+      (user-error "There is no pending review for %s - please add a comment before submitting."
+                  (magit-gh-pr-to-string pr)))
+    (setf (magit-gh-review-body review) body)
+    (magit-gh--post-review pr review)))
 
 (provide 'magit-gh-comments)
 
