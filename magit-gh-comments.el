@@ -58,7 +58,14 @@
 ;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
-;; TODO: Use this everywhere instead of alists
+;; - REVIEW-ID is the review identifier from Github
+;; - FILE is the name of the file to which the comment applies
+;; - COMMIT-SHA is the SHA of the git commit to which the comment applies
+;; - TEXT is the body of the comment
+;; - AUTHOR is the Github handle of the commenter
+;; - GH-POS is the Github position of the comment (an integer)
+;; - ORIGINAL-GH-POS is only set if this comment is outdated
+;; - IS-OUTDATED is t iff the comment does not apply to the most recent commit
 (defstruct magit-gh-comment
   review-id
   file
