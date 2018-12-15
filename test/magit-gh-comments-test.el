@@ -166,7 +166,7 @@ With a carriage-return + line-feed.")
            (first-review (car response))
            (first-comment (car (magit-gh-review-comments first-review))))
       (should (string-match-p "A comment about the removal of line 2"
-                              (alist-get :body first-comment)))
+                              (magit-gh-comment-text first-comment)))
       (should (string-match-p "This is a top-level review"
                               (magit-gh-review-body first-review))))))
 
@@ -176,94 +176,37 @@ With a carriage-return + line-feed.")
       (when (cdr pair)
         (setq result (cons pair result))))))
 
-
-(defun alist-equal-p (a1 a2)
-  (letfn ((k-str (lambda (a)
-                   (if (symbolp a)
-                       (symbol-name a)
-                     (string a)))))
-    (cond ((and (not a1) (not a2))
-           t)
-          ((and (atom a1) (atom a2))
-           (equal a1 a2))
-          ((and (listp a1) (listp a2)
-                (atom (cdr a1)) (atom (cdr a2)))
-           (and (alist-equal-p (car a1) (car a2))
-                (alist-equal-p (cdr a1) (cdr a2))))
-          ((and (listp a1) (listp a2))
-           (let ((s1 (sort a1 (lambda (p1 p2) (string< (k-str (car p1)) (k-str (car p2))))))
-                 (s2 (sort a2 (lambda (p1 p2) (string< (k-str (car p1)) (k-str (car p2)))))))
-             (and (alist-equal-p (car s1) (car s2))
-                  (alist-equal-p (cdr s1) (cdr s2)))))
-          (t nil))))
-
-(defun alist-equal-p (a1 a2)
-  (letfn ((alistp (lambda (x) (and (listp x) (-every? #'listp x)))))
-    (cond ((equal a1 a2) t)
-          ((and (alistp a1) (alistp a2))
-           (catch 'not-equal
-             (and
-              (dolist (kv a1 t)
-                (unless (alist-equal-p (alist-get (car kv) a1)
-                                       (alist-get (car kv) a2))
-                  (throw 'not-equal nil)))
-              (dolist (kv a2 t)
-                (unless (alist-equal-p (alist-get (car kv) a1)
-                                       (alist-get (car kv) a2))
-                  (throw 'not-equal nil))))))
-          (t nil))))
-
-(ert-deftest test-alist-equal-p ()
-  "Test of our test infrastructure"
-  (should (alist-equal-p '((:a . 1) (:b . 2))
-                         '((:b . 2) (:a . 1))))
-  (should (not (alist-equal-p '((:a . 2) (:b . 1))
-                              '((:a . 1) (:b . 2)))))
-  (should (alist-equal-p '((:a . 1) (:b . 2))
-                         '((:b . 2) (:a . 1) (:c . nil))))
-  (should (not (alist-equal-p '((:a . 1) (:b . 2))
-                              '((:b . 2) (:a . 1) (:c . 3)))))
-  (should (alist-equal-p '((:a . 1) (:b . (1 2 3)))
-                         '((:b . (1 2 3)) (:a . 1))))
-  (should (not (alist-equal-p '((:a . 1) (:b . (1 2 3 "foo")))
-                              '((:b . (1 2 3)) (:a . 1)))))
-  (should (alist-equal-p '((:a . 1) (:b . (1 2 3 "foo")))
-                               '((:b . (1 2 3 "foo")) (:a . 1)))))
-
 (ert-deftest test-magit-gh--github-fetch-comments ()
   ;; TODO: Test against the comment context given this diff body
   (let* ((diff-body magit-gh--test-diff-body)
          (sort-pred (lambda (x y)
-                      (if (equal (alist-get :pull_request_review_id x)
-                                 (alist-get :pull_request_review_id y))
-                          (string< (alist-get :body x)
-                                   (alist-get :body y))
-                        (< (alist-get :pull_request_review_id x)
-                           (alist-get :pull_request_review_id y)))))
+                      (if (equal (magit-gh-comment-review-id x)
+                                 (magit-gh-comment-review-id y))
+                          (string< (magit-gh-comment-text x)
+                                   (magit-gh-comment-text y))
+                        (< (magit-gh-comment-review-id x)
+                           (magit-gh-comment-review-id y)))))
          (retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
                                (magit-gh--list-comments magit-gh--test-pr)))
-         (retrieved-comments (sort (mapcar #'magit-gh--discard-empty-keys
-                                           retrieved-comments)
-                                   sort-pred))
-         (expected-comments '(((:pull_request_review_id . 42)
-                               (:author . "astahlman")
-                               (:body . "A comment about the removal of line 2")
-                               (:path . "f")
-                               (:position . 2))
-                              ((:pull_request_review_id . 43)
-                               (:author . "spiderman")
-                               (:body . "A comment about the addition of line 15")
-                               (:path . "f")
-                               (:position . 9))
-                              ((:pull_request_review_id . 43)
-                               (:author . "spiderman")
-                               (:body . "Some other comment that's been resolved")
-                               (:path . "f")
-                               (:is_outdated . t)
-                               (:original_position . 10)
-                               (:original_commit_id . "abcdef")))))
-    (should (= (length expected-comments) (length retrieved-comments)))
-    (should (cl-every #'alist-equal-p expected-comments retrieved-comments))))
+         (retrieved-comments (sort retrieved-comments sort-pred))
+         (expected-comments (list (make-magit-gh-comment :review-id 42
+                                                         :author "astahlman"
+                                                         :text "A comment about the removal of line 2"
+                                                         :file "f"
+                                                         :gh-pos 2)
+                                  (make-magit-gh-comment :review-id 43
+                                                         :author "spiderman"
+                                                         :text "A comment about the addition of line 15"
+                                                         :file "f"
+                                                         :gh-pos 9)
+                                  (make-magit-gh-comment :review-id 43
+                                                         :author "spiderman"
+                                                         :text "Some other comment that's been resolved"
+                                                         :file "f"
+                                                         :is-outdated t
+                                                         :original-gh-pos 10
+                                                         :commit-sha "abcdef"))))
+    (should (equal expected-comments retrieved-comments))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f

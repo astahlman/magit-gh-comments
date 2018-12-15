@@ -58,12 +58,23 @@
 ;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
-;; TODO: Use this everywhere instead of alists
+;; - REVIEW-ID is the review identifier from Github
+;; - FILE is the name of the file to which the comment applies
+;; - COMMIT-SHA is the SHA of the git commit to which the comment applies
+;; - TEXT is the body of the comment
+;; - AUTHOR is the Github handle of the commenter
+;; - GH-POS is the Github position of the comment (an integer)
+;; - ORIGINAL-GH-POS is only set if this comment is outdated
+;; - IS-OUTDATED is t iff the comment does not apply to the most recent commit
 (defstruct magit-gh-comment
+  review-id
   file
   commit-sha
+  text
+  author
   gh-pos
-  text)
+  original-gh-pos
+  is-outdated)
 
 ;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
 ;; Instead of jumping to a magit-diff, we'll open a buffer that shows all
@@ -490,18 +501,18 @@ Given a sequence of COMMENTS and Github diff GH-DIFF-BODY from
 which they came, add them to current magit-diff buffer."
   (save-excursion
     (dolist (comment comments)
-      (let ((magit-pos (magit-gh--diff-pos/gh->magit (alist-get :path comment)
-                                                     (alist-get :position comment)
+      (let ((magit-pos (magit-gh--diff-pos/gh->magit (magit-gh-comment-file comment)
+                                                     (magit-gh-comment-gh-pos comment)
                                                      gh-diff-body))
             (ov))
-        (magit-gh--visit-diff-pos (alist-get :path comment) magit-pos)
+        (magit-gh--visit-diff-pos (magit-gh-comment-file comment) magit-pos)
         (setq ov (make-overlay (point-at-bol) (1+ (point-at-eol))))
         (overlay-put ov 'magit-gh-comment comment)
         (overlay-put ov 'face 'underline)
         (overlay-put ov 'after-string (magit-gh--propertize-overlay-text
                                        (format "%s - @%s"
-                                               (alist-get :body comment)
-                                               (alist-get :author comment))))))))
+                                               (magit-gh-comment-text comment)
+                                               (magit-gh-comment-author comment))))))))
 
 (defun magit-gh--delete-comment-overlays ()
   "Delete all comment overlays in the current buffer."
@@ -581,9 +592,9 @@ magit-gh-pulls)"
           (when-let ((body (magit-gh-review-body review)))
             (insert body "\n"))
           (dolist (comment (magit-gh-review-comments review))
-            (magit-insert-section (comment comment (alist-get :is_outdated comment))
+            (magit-insert-section (comment comment (magit-gh-comment-is-outdated comment))
               (magit-insert-heading (format "%sComment at %s"
-                                            (if (alist-get :is_outdated comment)
+                                            (if (magit-gh-comment-is-outdated comment)
                                                 "[Outdated] "
                                               "")
                                             "<timestamp>"))
@@ -591,30 +602,30 @@ magit-gh-pulls)"
                                                         (magit-gh-pr-diff-range pr)
                                                         comment))
               (insert "\n")
-              (insert (alist-get :body comment))
+              (insert (magit-gh-comment-text comment))
               (insert "\n")
-              (insert (format "- %s" (alist-get :author comment)))
+              (insert (format "- %s" (magit-gh-comment-author comment)))
               (insert "\n")))))))
   (goto-char (point-min))
   (current-buffer))
 
 (defun magit-gh--propertize-comment-ctx (diff-body diff-range comment)
-  (let* ((diff-body (if (not (alist-get :is_outdated comment))
+  (let* ((diff-body (if (not (magit-gh-comment-is-outdated comment))
                         diff-body
                       (magit-gh--fetch-diff-for-commit-from-github
-                       (alist-get :original_commit_id comment))))
-         (diff-range (if (not (alist-get :is_outdated comment))
+                       (magit-gh-comment-commit-sha comment))))
+         (diff-range (if (not (magit-gh-comment-is-outdated comment))
                          diff-range
                        (let ((base-sha (car (split-string diff-range "\\.\\.")))
-                             (original-head-sha (substring (alist-get :original_commit_id comment) 0 6)))
+                             (original-head-sha (substring (magit-gh-comment-commit-sha comment) 0 6)))
                          (format "%s..%s" base-sha original-head-sha))))
-         (position (if (not (alist-get :is_outdated comment))
-                       (alist-get :position comment)
-                     (alist-get :original_position comment)))
+         (position (if (not (magit-gh-comment-is-outdated comment))
+                       (magit-gh-comment-gh-pos comment)
+                     (magit-gh-comment-original-gh-pos comment)))
          (comment-ctx (magit-gh--comment-ctx
                        diff-body
                        position
-                       (alist-get :path comment)))
+                       (magit-gh-comment-file comment)))
          (ctx-lines (split-string comment-ctx "\n"))
          (i 0)
          (in-hunk t)
@@ -633,11 +644,11 @@ magit-gh-pulls)"
                                         (lambda ()
                                           (interactive)
                                           (let ((magit-pos (magit-gh--diff-pos/gh->magit
-                                                            (alist-get :path comment)
+                                                            (magit-gh-comment-file comment)
                                                             gh-pos
                                                             diff-body)))
                                             (magit-diff diff-range)
-                                            (magit-gh--visit-diff-pos (alist-get :path comment)
+                                            (magit-gh--visit-diff-pos (magit-gh-comment-file comment)
                                                                       magit-pos)))))
                                     keymap))
                     line)

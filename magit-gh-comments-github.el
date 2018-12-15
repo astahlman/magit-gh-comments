@@ -190,12 +190,7 @@ This function modifies and returns its input."
 
 The returned list does not include outdated comments. A comment
 is outdated if its position is null, according to Github. Each
-element of the result is an alist with the following keys:
-
-:body - The text of the comment
-:position - The comment's Github-style position in the diff
-:author - The Github username of the comments' author
-:path - The path to the file to which this comment applies"
+element of the result is a `magit-gh-comment'"
   (apply 'append
          (mapcar (lambda (review) (magit-gh-review-comments review))
                  (magit-gh--list-reviews pr))))
@@ -268,34 +263,34 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                    (magit-gh--url-for-pr-reviews pr)
                    :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                    :parser #'magit-gh--parse-json-array))
-         (reviews (mapcar (lambda (review)
-                            (make-magit-gh-review
-                             :id (alist-get :id review)
-                             :author (cdr (magit-gh--assoc-recursive '(:user :login) review))
-                             :body (alist-get :body review)
-                             :state (alist-get :state review)))
-                          reviews))
+         (review-id->review (let ((_ht (ht-create)))
+                              (dolist (review reviews _ht)
+                                (ht-set! _ht
+                                         (alist-get :id review)
+                                         (make-magit-gh-review
+                                          :id (alist-get :id review)
+                                          :author (cdr (magit-gh--assoc-recursive '(:user :login) review))
+                                          :body (alist-get :body review)
+                                          :state (alist-get :state review))))))
          (comments (magit-gh--request-sync
                     (magit-gh--url-for-pr-comments pr)
                     :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                     :parser #'magit-gh--parse-json-array))
          (comments (mapcar (lambda (comment)
-                             (magit-gh--alist-filter '(:pull_request_review_id (:user :login) :body :path :position :original_position :original_commit_id)
-                                                     comment))
-                           comments))
-         (comments (mapcar (lambda (comment) (magit-gh--rename-key comment :login :author)) comments))
-         (comments (mapcar (lambda (comment)
-                             (add-to-list 'comment `(:is_outdated . ,(not (alist-get :position comment)))))
+                             (make-magit-gh-comment :review-id (alist-get :pull_request_review_id comment)
+                                                    :file (alist-get :path comment)
+                                                    :commit-sha (alist-get :original_commit_id comment)
+                                                    :gh-pos (alist-get :position comment)
+                                                    :text (alist-get :body comment)
+                                                    :author (cdr (magit-gh--assoc-recursive '(:user :login) comment))
+                                                    :original-gh-pos (alist-get :original_position comment)
+                                                    :is-outdated (not (alist-get :position comment))))
                            comments)))
-    (let* ((result (ht-create))
-           ;; review-id -> magit-gh-review
-           (reviews (dolist (review reviews result)
-                      (ht-set! result (magit-gh-review-id review) review))))
-      (dolist (comment comments (magit-gh--sort (ht-values reviews) #'magit-gh-review-id))
-        (let* ((review-id (or (alist-get :pull_request_review_id comment)
-                              (error "Could not find the review associated with this comment!")))
-               (review (ht-get reviews review-id)))
-          (push comment (magit-gh-review-comments review)))))))
+    (dolist (comment comments)
+      (let* ((review-id (magit-gh-comment-review-id comment))
+             (review (ht-get review-id->review review-id)))
+        (push comment (magit-gh-review-comments review))))
+    (magit-gh--sort (ht-values review-id->review) #'magit-gh-review-id)))
 
 (defun magit-gh-comment--to-github-format (comment &optional is-standalone)
   "Return COMMENT as an alist with the fields required by the Github API
