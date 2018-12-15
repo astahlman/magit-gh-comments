@@ -166,7 +166,7 @@ With a carriage-return + line-feed.")
            (first-review (car response))
            (first-comment (car (magit-gh-review-comments first-review))))
       (should (string-match-p "A comment about the removal of line 2"
-                              (alist-get :body first-comment)))
+                              (magit-gh-comment-text first-comment)))
       (should (string-match-p "This is a top-level review"
                               (magit-gh-review-body first-review))))))
 
@@ -234,36 +234,33 @@ With a carriage-return + line-feed.")
   ;; TODO: Test against the comment context given this diff body
   (let* ((diff-body magit-gh--test-diff-body)
          (sort-pred (lambda (x y)
-                      (if (equal (alist-get :pull_request_review_id x)
-                                 (alist-get :pull_request_review_id y))
-                          (string< (alist-get :body x)
-                                   (alist-get :body y))
-                        (< (alist-get :pull_request_review_id x)
-                           (alist-get :pull_request_review_id y)))))
+                      (if (equal (magit-gh-comment-review-id x)
+                                 (magit-gh-comment-review-id y))
+                          (string< (magit-gh-comment-text x)
+                                   (magit-gh-comment-text y))
+                        (< (magit-gh-comment-review-id x)
+                           (magit-gh-comment-review-id y)))))
          (retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
                                (magit-gh--list-comments magit-gh--test-pr)))
-         (retrieved-comments (sort (mapcar #'magit-gh--discard-empty-keys
-                                           retrieved-comments)
-                                   sort-pred))
-         (expected-comments '(((:pull_request_review_id . 42)
-                               (:author . "astahlman")
-                               (:body . "A comment about the removal of line 2")
-                               (:path . "f")
-                               (:position . 2))
-                              ((:pull_request_review_id . 43)
-                               (:author . "spiderman")
-                               (:body . "A comment about the addition of line 15")
-                               (:path . "f")
-                               (:position . 9))
-                              ((:pull_request_review_id . 43)
-                               (:author . "spiderman")
-                               (:body . "Some other comment that's been resolved")
-                               (:path . "f")
-                               (:is_outdated . t)
-                               (:original_position . 10)
-                               (:original_commit_id . "abcdef")))))
-    (should (= (length expected-comments) (length retrieved-comments)))
-    (should (cl-every #'alist-equal-p expected-comments retrieved-comments))))
+         (retrieved-comments (sort retrieved-comments sort-pred))
+         (expected-comments (list (make-magit-gh-comment :review-id 42
+                                                         :author "astahlman"
+                                                         :text "A comment about the removal of line 2"
+                                                         :file "f"
+                                                         :gh-pos 2)
+                                  (make-magit-gh-comment :review-id 43
+                                                         :author "spiderman"
+                                                         :text "A comment about the addition of line 15"
+                                                         :file "f"
+                                                         :gh-pos 9)
+                                  (make-magit-gh-comment :review-id 43
+                                                         :author "spiderman"
+                                                         :text "Some other comment that's been resolved"
+                                                         :file "f"
+                                                         :is-outdated t
+                                                         :original-gh-pos 10
+                                                         :commit-sha "abcdef"))))
+    (should (equal expected-comments retrieved-comments))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
