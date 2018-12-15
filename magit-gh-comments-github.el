@@ -16,6 +16,11 @@
   state
   body)
 
+(defun magit-gh-pr-to-string (pr)
+  (format "%s#%s"
+          (magit-gh-pr-repo-name pr)
+          (magit-gh-pr-pr-number pr)))
+
 (setq request-message-level 'debug)
 (setq request-log-level 'debug)
 
@@ -282,6 +287,10 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
           (map-put review :comments
                    (cons comment review-comments))
           (map-put reviews review-id review))))))
+
+;; TODO: Implement me!
+(defun magit-gh--post-review (pr review)
+  )
 
 ;; (setq my-reviews (magit-gh--list-reviews magit-gh-comment-test-pr))
 ;; (magit-gh--pretty-print my-reviews)
