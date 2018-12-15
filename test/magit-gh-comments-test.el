@@ -164,11 +164,11 @@ With a carriage-return + line-feed.")
   (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
     (let* ((response (magit-gh--list-reviews magit-gh--test-pr))
            (first-review (car response))
-           (first-comment (car (alist-get :comments first-review))))
+           (first-comment (car (magit-gh-review-comments first-review))))
       (should (string-match-p "A comment about the removal of line 2"
                               (alist-get :body first-comment)))
       (should (string-match-p "This is a top-level review"
-                              (alist-get :body first-review))))))
+                              (magit-gh-review-body first-review))))))
 
 (defun magit-gh--discard-empty-keys (l)
   (let (result)

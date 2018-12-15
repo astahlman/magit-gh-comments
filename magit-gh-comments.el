@@ -60,13 +60,6 @@
 
 (defstruct magit-gh-comment file diff-pos text)
 
-;; BODY is the top-level review text
-;; COMMENTS is a list of `magit-gh-comment's
-;; TODO: Should we use this data structure elsewhere?
-;; i.e., as the return value of `magit-gh--list-reviews'?
-(defstruct magit-gh-review body comments)
-
-
 ;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
 ;; Instead of jumping to a magit-diff, we'll open a buffer that shows all
 ;; of the reviews and comments
@@ -74,6 +67,29 @@
   (let ((map (make-sparse-keymap)))
     (define-key map [remap magit-visit-thing]      'magit-gh-show-reviews)
     map))
+
+
+(defun magit-gh--sort (seq key-fn &optional pred)
+  "Sort SEQ based on a given key.
+
+KEY-FN is applied to each element of SEQ to obtain a value used
+as the basis for ordering. PRED is the function used for
+comparison and defaults to #'<.
+
+Example usage:
+
+(magit-gh--sort '(-100 1 2) #'abs) -> '(1 2 -100)
+"
+  (let ((pred (or pred #'<)))
+    (sort seq (lambda (x y)
+                (apply pred (list (apply key-fn (list x))
+                                  (apply key-fn (list y))))))))
+
+(ert-deftest test-magit-gh--sort ()
+  (should (equal (magit-gh--sort '("z" "a" "f") #'identity #'string<)
+                 '("a" "f" "z")))
+  (should (equal (magit-gh--sort '(-100 1 2) #'abs)
+                 '(1 2 -100))))
 
 (defmacro letfn (fn-defs &rest body)
   (declare (indent 1) (debug ((&rest (sexp function-form)) body)))
@@ -556,10 +572,10 @@ magit-gh-pulls)"
       (dolist (review reviews)
         (magit-insert-section (review review)
           (magit-insert-heading (format "Review by %s"
-                                        (alist-get :author review)))
-          (when-let ((body (alist-get :body review)))
+                                        (magit-gh-review-author review)))
+          (when-let ((body (magit-gh-review-body review)))
             (insert body "\n"))
-          (dolist (comment (alist-get :comments review))
+          (dolist (comment (magit-gh-review-comments review))
             (magit-insert-section (comment comment (alist-get :is_outdated comment))
               (magit-insert-heading (format "%sComment at %s"
                                             (if (alist-get :is_outdated comment)

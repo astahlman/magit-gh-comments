@@ -16,6 +16,12 @@
   state
   body)
 
+;; ID is the unique Github identifier for this review
+;; AUTHOR is the Github handle of the user who submitted the review
+;; BODY is the top-level review text
+;; COMMENTS is a list of `magit-gh-comment's
+(defstruct magit-gh-review id author body comments state)
+
 (defun magit-gh-pr-to-string (pr)
   (format "%s#%s"
           (magit-gh-pr-repo-name pr)
@@ -184,7 +190,7 @@ element of the result is an alist with the following keys:
 :author - The Github username of the comments' author
 :path - The path to the file to which this comment applies"
   (apply 'append
-         (mapcar (lambda (review) (alist-get :comments review))
+         (mapcar (lambda (review) (magit-gh-review-comments review))
                  (magit-gh--list-reviews pr))))
 
 
@@ -249,9 +255,6 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
               pair))
           alist))
 
-(defun magit-gh--alist-values (alist)
-  (mapcar #'cdr alist))
-
 (defun magit-gh--list-reviews (pr)
   "Return a list of reviews on the given PR."
   (let* ((reviews (magit-gh--request-sync
@@ -259,10 +262,12 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                    :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                    :parser #'magit-gh--parse-json-array))
          (reviews (mapcar (lambda (review)
-                            (magit-gh--alist-filter '(:id (:user :login) :body :state)
-                                                    review))
+                            (make-magit-gh-review
+                             :id (alist-get :id review)
+                             :author (cdr (magit-gh--assoc-recursive '(:user :login) review))
+                             :body (alist-get :body review)
+                             :state (alist-get :state review)))
                           reviews))
-         (reviews (mapcar (lambda (review) (magit-gh--rename-key review :login :author)) reviews))
          (comments (magit-gh--request-sync
                     (magit-gh--url-for-pr-comments pr)
                     :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
@@ -275,24 +280,18 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
          (comments (mapcar (lambda (comment)
                              (add-to-list 'comment `(:is_outdated . ,(not (alist-get :position comment)))))
                            comments)))
-    ;; review-id -> ((:comments ...) (:id . $id) (:body . $body) (:author . $user))
-    (let* ((reviews (-group-by (-partial #'alist-get :id) reviews))
-           ;; alist values are list of lists - unnest them as a single list
-           (reviews (mapcar (lambda (x) `(,(car x) . ,(cadr x))) reviews)))
-      (dolist (comment comments (magit-gh--alist-values reviews))
+    (let* ((result (ht-create))
+           ;; review-id -> magit-gh-review
+           (reviews (dolist (review reviews result)
+                      (ht-set! result (magit-gh-review-id review) review))))
+      (dolist (comment comments (magit-gh--sort (ht-values reviews) #'magit-gh-review-id))
         (let* ((review-id (or (alist-get :pull_request_review_id comment)
                               (error "Could not find the review associated with this comment!")))
-               (review (alist-get review-id reviews))
-               (review-comments (alist-get :comments review)))
-          (map-put review :comments
-                   (cons comment review-comments))
-          (map-put reviews review-id review))))))
+               (review (ht-get reviews review-id)))
+          (push comment (magit-gh-review-comments review)))))))
 
 ;; TODO: Implement me!
 (defun magit-gh--post-review (pr review)
   )
-
-;; (setq my-reviews (magit-gh--list-reviews magit-gh-comment-test-pr))
-;; (magit-gh--pretty-print my-reviews)
 
 (provide 'magit-gh-comments-github)
