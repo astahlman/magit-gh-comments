@@ -1,3 +1,5 @@
+;; -*- lexical-binding: t -*-
+
 (defun magit-gh--pretty-print (x)
   "Pretty print the form X in a buffer named *pretty*"
   (when (get-buffer "*pretty*")
@@ -6,8 +8,6 @@
     (cl-prettyprint x))
   (view-buffer-other-window "*pretty*"))
 
-(magit-gh--pretty-print magit-gh--request-cache)
-
 (defun magit-gh--comment-at-point ()
   "Return the comment overlay at point, if it exists."
   (car (-filter (lambda (ov) (and (overlay-get ov 'magit-gh-comment)
@@ -15,7 +15,7 @@
                                   (<= (overlay-end ov) (point))))
                 (-flatten (overlay-lists)))))
 
-(defun overlays-at-point ()
+(defun magit-gh--overlays-at-point ()
   "Return overlays which touch point.
 
 The start and end of the overlays are inclusive."
@@ -24,8 +24,7 @@ The start and end of the overlays are inclusive."
                             (<= (point) (overlay-end ov))))
           (-flatten (overlay-lists))))
 
-
-(defun delete-overlays-at-point ()
+(defun magit-gh--delete-overlays-at-point ()
   (interactive)
   (dolist (ov (overlays-at-point))
     (delete-overlay ov)))
