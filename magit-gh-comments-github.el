@@ -160,9 +160,8 @@ This function modifies and returns its input."
                                      ("Accept" . "application/vnd.github.v3.diff"))))
 
 
-;; TODO: Make an integration test out of this:
-;; (magit-gh--fetch-diff-from-github magit-gh-comment-test-pr)
 
+;; TODO: Get rid of this in favor magit-gh-comment--to-github-format
 (defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text)
   (json-encode `((:body . ,comment-text)
                  (:commit_id . ,commit-sha)
@@ -298,21 +297,34 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                (review (ht-get reviews review-id)))
           (push comment (magit-gh-review-comments review)))))))
 
+(defun magit-gh-comment--to-github-format (comment &optional is-standalone)
+  "Return COMMENT as an alist with the fields required by the Github API
+
+API reference: https://developer.github.com/v3/pulls/reviews/#input"
+  (let ((result `((:body . ,(magit-gh-comment-text comment))
+                  (:path . ,(magit-gh-comment-file comment))
+                  (:position . ,(magit-gh-comment-gh-pos comment)))))
+    (when is-standalone
+      (push `(:commit_id . ,(magit-gh-comment-commit-sha comment)) result))
+    result))
+
 (defun magit-gh--post-review (pr review)
   "Submit the REVIEW for PR to Github.
 
 API reference: https://developer.github.com/v3/pulls/reviews/#example"
-  (let ((url (magit-gh--url-for-pr-comments pr))
-        (json-payload (json-encode `((:commit_id . ,(magit-gh-review-commit-sha review))
-                                     (:body . ,(magit-gh-review-body review))
-                                     (:event . ,(magit-gh-review-state review))
-                                     (:comments . ,(magit-gh-review-comments review))))))
+  (let ((url (magit-gh--url-for-pr-reviews pr))
+        (payload `((:commit_id . ,(magit-gh-review-commit-sha review))
+                   (:body . ,(magit-gh-review-body review))
+                   (:comments . ,(mapcar #'magit-gh-comment--to-github-format
+                                         (magit-gh-review-comments review))))))
+    (when-let ((event (magit-gh-review-state review)))
+      (push `(:event . ,event) payload))
     (request url
              :type "POST"
              :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
                         ("Content-Type" . "application/json")
                         ("Accept" . "application/vnd.github.v3.json"))
-             :data json-payload
+             :data (json-encode payload)
              :complete (function*
                         (lambda (&key response &allow-other-keys)
                           (if (not (member (request-response-status-code response) '(200 201)))

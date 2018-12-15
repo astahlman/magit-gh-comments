@@ -58,7 +58,12 @@
 ;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
-(defstruct magit-gh-comment file diff-pos text)
+;; TODO: Use this everywhere instead of alists
+(defstruct magit-gh-comment
+  file
+  commit-sha
+  gh-pos
+  text)
 
 ;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
 ;; Instead of jumping to a magit-diff, we'll open a buffer that shows all
@@ -430,22 +435,22 @@ If called with a prefix arg, the comment is posted immediately to
 Github. Else, the comment is saved in a pending review."
   (interactive "P\nMComment: ")
   (let ((post-immediately arg)
-        (current-pr (magit-gh--get-current-pr)))
+        (current-pr (magit-gh--get-current-pr))
+        (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
     (if post-immediately
-        (let ((github-pos (magit-gh--cur-github-diff-pos))
-              (commit-sha (cdr (magit-split-range (magit-diff--dwim)))))
+        (let ((github-pos (magit-gh--cur-github-diff-pos)))
           (magit-gh--post-pr-comment current-pr
                                      (magit-current-file) ;; FIXME: Add current-file to github-pos, get rid of this arg
                                      commit-sha
                                      github-pos
                                      comment-text))
       ;; else, save this comment for later
-      (let ((magit-pos (magit-gh--cur-magit-diff-pos))
-            (comment (make-magit-gh-comment :file (magit-current-file)
-                                            :diff-pos (magit-gh--cur-magit-diff-pos)
+      (let ((comment (make-magit-gh-comment :file (magit-current-file)
+                                            :commit-sha commit-sha
+                                            :gh-pos (magit-gh--cur-github-diff-pos)
                                             :text comment-text))
             (pending-review (or (magit-gh--get-review-draft current-pr)
-                                (make-magit-gh-review))))
+                                (make-magit-gh-review :commit-sha commit-sha))))
         (setf (magit-gh-review-comments pending-review)
               (cons comment (magit-gh-review-comments pending-review)))
         (magit-gh--store-review-draft pending-review current-pr)))))
@@ -697,8 +702,12 @@ See also `magit-buffer-lock-functions'."
 (defun magit-gh--get-review-draft (pr)
   (ht-get magit-gh--review-drafts pr))
 
-(defun magit-gh--discard-review-draft (pr)
-  (ht-remove! magit-gh--review-drafts pr))
+(defun magit-gh--discard-review-draft (&optional pr)
+  (interactive)
+  (if (not pr)
+      (ht-clear! magit-gh--review-drafts)
+    (ht-remove! magit-gh--review-drafts pr)))
+
 
 (defun magit-gh--submit-pending-review (&optional body)
   (let* ((pr (magit-gh--get-current-pr))
