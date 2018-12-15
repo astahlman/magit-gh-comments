@@ -415,9 +415,7 @@ A comment about the addition of line 15
 
 (ert-deftest magit-gh--test-fetch-review-draft ()
   (let* ((saved-comment (make-magit-gh-comment :file "f"
-                                               :diff-pos (make-magit-gh-diff-pos :a-or-b :b
-                                                                                 :hunk-start 1
-                                                                                 :offset 2)
+                                               :gh-pos 1
                                                :text "This comment isn't submitted yet"))
          (pending-review (make-magit-gh-review :body "I'm still working on this review"
                                                :comments (list saved-comment))))
@@ -429,21 +427,17 @@ A comment about the addition of line 15
 (defun magit-gh--simulate-adding-comments (comments)
   (dolist (comment comments)
     (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
-                 (magit-gh--cur-magit-diff-pos (lambda () (magit-gh-comment-diff-pos comment)))
+                 (magit-gh--cur-github-diff-pos (lambda () (magit-gh-comment-gh-pos comment)))
                  (magit-current-file (lambda () (magit-gh-comment-file comment)))
                  (magit-diff--dwim (lambda () (magit-gh-pr-diff-range magit-gh--test-pr))))
       (magit-gh-add-comment nil (magit-gh-comment-text comment)))))
 
 (setq magit-gh--test-comments
       (let ((comment1 (make-magit-gh-comment :file "a"
-                                             :diff-pos (make-magit-gh-diff-pos :a-or-b :b
-                                                                               :hunk-start 1
-                                                                               :offset 2)
+                                             :gh-pos 1
                                              :text "Comment 1"))
             (comment2 (make-magit-gh-comment :file "a"
-                                             :diff-pos (make-magit-gh-diff-pos :a-or-b :b
-                                                                               :hunk-start 1
-                                                                               :offset 2)
+                                             :gh-pos 2
                                              :text "Comment 2")))
         (list comment1 comment2)))
 
