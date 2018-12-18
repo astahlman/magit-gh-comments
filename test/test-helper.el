@@ -102,14 +102,17 @@ failures.
     (with-current-buffer (get-buffer-create buf-name) (insert contents))
     buf-name))
 
-(defun magit-gh--section-content-as-string (&optional section)
+(defun magit-gh--section-content-as-string (&optional section include-heading)
   "Return the content of SECTION as a string.
 
 If SECTION is not supplied, use the value of
 `magit-current-section'."
   (let ((section (or section (magit-current-section))))
-    (buffer-substring-no-properties (oref section start)
-                                    (oref section end))))
+    (buffer-substring (if include-heading
+                          (oref section start)
+                        (or (oref section content)
+                            (oref section start)))
+                      (oref section end))))
 
 
 (defun magit-gh--str-without-props (s)

@@ -263,6 +263,16 @@ index 9fda99d..f88549a 100644
                      (magit-gh--comment-ctx diff-body 5 "f"))))
     (should-error (magit-gh--comment-ctx diff-body 4 "f"))))
 
+(defun magit-gh--section-search-forward (pred)
+  (while (progn (condition-case nil
+                    (magit-section-forward)
+                  (user-error (error "End-of-buffer reached; no matching magit-section")))
+                (not (funcall pred (magit-current-section))))))
+
+(defun magit-gh--section-type-matcher (target-type)
+  (lambda (section)
+    (equal (oref section type) target-type)))
+
 
 (ert-deftest magit-gh--test-populate-reviews-buffer ()
   (setq magit-gh--request-cache nil)
@@ -300,14 +310,17 @@ With a carriage-return + line-feed.")))
                                         [0-9]+ files changed, [0-9]+ insertions(\\+), [0-9]+ deletions(-)
                                         \\([a-zA-Z-/]+ +| +[0-9] [+-]+
                                         ?\\)+")))
-      (magit-section-forward) ;; file1
-      (magit-section-forward) ;; file2
+      (dotimes (_i 2)
+        (magit-gh--section-search-forward
+         (magit-gh--section-type-matcher 'file)))
       ;; Review sections
-      (magit-section-forward)
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'review))
       (should (magit-gh--looking-at-p "Review by astahlman"))
       (should (s-contains? "This is a top-level review"
                            (magit-gh--section-content-as-string)))
-      (magit-section-forward)
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'comment))
       (should (magit-gh--looking-at-p "Comment at .+
 f
 @@ -1,3 \\+1,2 @@
@@ -325,9 +338,11 @@ A comment about the removal of line 2
                                                       :offset 2))))
         (should (equal (caar magit-diff-calls)
                        (magit-gh-pr-diff-range magit-gh--test-pr))))
-      (magit-section-forward-sibling)
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'review))
       (should (magit-gh--looking-at-p "Review by spiderman"))
-      (magit-section-forward)
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'comment))
       (should (oref (magit-current-section) hidden))
       (magit-section-toggle (magit-current-section))
       (should (magit-gh--looking-at-p "\\[Outdated\\] Comment at .+
@@ -338,7 +353,8 @@ f
 \\+16\\. :b/10/6 (this line will be deleted in the next commit)
 Some other comment that's been resolved
 - spiderman"))
-      (magit-section-forward)
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'comment))
       (should (magit-gh--looking-at-p "Comment at .+
 f
  12\\. :a/11/2, :b/10/2
@@ -375,11 +391,22 @@ A comment about the addition of line 15
                  (magit-diff--dwim (lambda () (magit-gh-pr-diff-range magit-gh--test-pr))))
       (magit-gh-add-comment nil (magit-gh-comment-text comment)))))
 
+(defun magit-gh--simulate-adding-review-body (text)
+  (if-let ((review-body-section (car (magit-gh--filter-sections
+                                      (lambda (sec)
+                                        (equal 'review-body (oref sec type)))))))
+      (progn
+        (magit-section-goto review-body-section)
+        (execute-kbd-macro (kbd "C-c '"))
+        (insert text)
+        (execute-kbd-macro (kbd "C-c '")))
+    (error "Couldn't find a magit-section corresponding to the review body")))
+
 (setq magit-gh--test-comments
-      (let ((comment1 (make-magit-gh-comment :file "a"
+      (let ((comment1 (make-magit-gh-comment :file "f"
                                              :gh-pos 1
                                              :text "Comment 1"))
-            (comment2 (make-magit-gh-comment :file "a"
+            (comment2 (make-magit-gh-comment :file "f"
                                              :gh-pos 2
                                              :text "Comment 2")))
         (list comment1 comment2)))
@@ -394,17 +421,23 @@ A comment about the addition of line 15
 (ert-deftest magit-gh--test-submit-pending-comments ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
   (let (mock-calls)
-    (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+    (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+                 (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
                  (magit-gh--post-review (lambda (&rest args) (push args mock-calls))))
       (magit-gh--simulate-adding-comments magit-gh--test-comments)
-      (magit-gh--submit-pending-review "Super-great job")
+      (magit-gh-start-review)
+      (magit-gh--simulate-adding-review-body "Super-great job")
+      (magit-gh-submit-review)
       (should (equal (list magit-gh--test-pr
                            (make-magit-gh-review :body "Super-great job"
-                                                 :comments (reverse magit-gh--test-comments)))
+                                                 :comments (reverse magit-gh--test-comments)
+                                                 :state 'pending))
                      (car mock-calls))))))
 
 (ert-deftest magit-gh--test-submission-rejected-if-empty ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
-  (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
-    (should-error (magit-gh--submit-pending-review) :type 'user-error)))
+  (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+               (magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
+    (magit-gh-start-review)
+    (should-error (magit-gh-submit-review) :type 'user-error)))
 

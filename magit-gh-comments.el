@@ -40,6 +40,8 @@
 (require 'ht)
 (require 'magit-gh-comments-github)
 (require 'magit-gh-comments-diff)
+(require 'magit-gh-comments-prose)
+(require 'magit-gh-comments-utils)
 
 
 (defvar magit-gh-comments-mode-map
@@ -157,6 +159,14 @@ debugging during testing."
                                   magit-pos
                                   diff-body)))
 
+(defun magit-gh--filter-sections (pred &optional parent)
+  "Return every child section of PARENT that matches PRED.
+
+PARENT defaults to `magit-root-section'"
+  (-filter
+   pred
+   (oref (or parent magit-root-section) children)))
+
 (defun magit-gh--visit-diff-pos (file pos)
   "Put point at the given position POS in a magit-diff buffer.
 
@@ -165,11 +175,10 @@ magit-gh-diff-pos POS in the section for FILE."
   (-if-let* ((rev (magit-gh-diff-pos-a-or-b pos))
              (target (+ (magit-gh-diff-pos-offset pos)
                         (magit-gh-diff-pos-hunk-start pos)))
-             (file-section (car (-filter
+             (file-section (car (magit-gh--filter-sections
                                  (lambda (sec) (and (magit-file-section-p sec)
                                                     (string= (magit-section-value sec)
-                                                             file)))
-                                 (oref magit-root-section children))))
+                                                             file))))))
              (target-in-hunk-p (lambda (hunk-header)
                                  (let ((start (alist-get (if (eq :a rev) :a-start :b-start)
                                                          hunk-header))
@@ -177,10 +186,11 @@ magit-gh-diff-pos POS in the section for FILE."
                                                        hunk-header)))
                                    (and (>= target start)
                                         (<= target (+ start len))))))
-             (hunk-section (-filter (lambda (section)
-                                      (if-let ((hunk-header (magit-gh--try-parse-hunk-header2 section)))
-                                          (funcall target-in-hunk-p hunk-header)))
-                                    (oref file-section children))))
+             (hunk-section (magit-gh--filter-sections
+                            (lambda (sec)
+                              (if-let ((hunk-header (magit-gh--try-parse-hunk-header2 sec)))
+                                  (funcall target-in-hunk-p hunk-header)))
+                            file-section)))
       (progn
         (setq file-sec file-section)
         (assert (= 1 (length hunk-section)))
@@ -430,13 +440,10 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
                                 )))))
 
 
-(defun magit-gh--current-section-content ()
-  "Return the contents of the magit section at point."
-  (interactive)
+(defun magit-gh--section-content (section)
   (buffer-substring-no-properties
-   (magit-section-start (magit-current-section))
-   (magit-section-end (magit-current-section))))
-
+   (magit-section-start section)
+   (magit-section-end section)))
 
 ;;;###autoload
 (defun magit-gh-add-comment (arg comment-text)
@@ -461,7 +468,8 @@ Github. Else, the comment is saved in a pending review."
                                             :gh-pos (magit-gh--cur-github-diff-pos)
                                             :text comment-text))
             (pending-review (or (magit-gh--get-review-draft current-pr)
-                                (make-magit-gh-review :commit-sha commit-sha))))
+                                (make-magit-gh-review :commit-sha commit-sha
+                                                      :state 'pending))))
         (setf (magit-gh-review-comments pending-review)
               (cons comment (magit-gh-review-comments pending-review)))
         (magit-gh--store-review-draft pending-review current-pr)))))
@@ -560,11 +568,24 @@ magit-gh-pulls)"
   (and (boundp 'magit-gh--current-pr)
        magit-gh--current-pr))
 
-(defun magit-gh-comments-refresh-buffer (pr &rest _refresh-args)
+(defun magit-gh-comments-refresh-buffer (pr action &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
   (setq-local magit-gh--current-pr pr)
-  (magit-gh--hydrate-pr-from-github pr)
-  (magit-gh--populate-reviews pr))
+  (if (equal action :view-pr)
+      (progn
+        (magit-gh--hydrate-pr-from-github pr)
+        (magit-gh--populate-reviews pr))
+    (magit-gh--populate-pending-review pr)))
+
+(defvar magit-gh--review-body-placeholder-text (propertize "Leave a comment"
+                                                           'magit-gh-is-placeholder t
+                                                           'face 'italic))
+
+(defun magit-gh--get-review-body (section)
+  (let ((section-content (magit-gh--section-content-as-string section)))
+    (if (get-text-property 0 'magit-gh-is-placeholder section-content)
+        nil
+      section-content)))
 
 (defun magit-gh--populate-reviews (pr)
   "Populate and return the magit reviews buffer for the given PR."
@@ -585,34 +606,47 @@ magit-gh-pulls)"
       (insert "\n"))
     (let ((reviews (magit-gh--list-reviews pr))
           (diff-body (magit-gh--fetch-diff-from-github pr)))
-      (dolist (review reviews)
-        (magit-insert-section (review review)
-          (magit-insert-heading (format "Review by %s"
-                                        (magit-gh-review-author review)))
-          (when-let ((body (magit-gh-review-body review)))
-            (insert body "\n"))
-          (dolist (comment (magit-gh-review-comments review))
-            (magit-insert-section (comment comment (magit-gh-comment-is-outdated comment))
-              (magit-insert-heading (format "%sComment at %s"
-                                            (if (magit-gh-comment-is-outdated comment)
-                                                "[Outdated] "
-                                              "")
-                                            "<timestamp>"))
-              (insert (magit-gh--propertize-comment-ctx diff-body
-                                                        (magit-gh-pr-diff-range pr)
-                                                        comment))
-              (insert "\n")
-              (insert (magit-gh-comment-text comment))
-              (insert "\n")
-              (insert (format "- %s" (magit-gh-comment-author comment)))
-              (insert "\n")))))))
-  (goto-char (point-min))
-  (current-buffer))
+      (magit-gh--insert-reviews (magit-gh--get-current-pr)
+                                reviews
+                                diff-body))
+    (goto-char (point-min))
+    (current-buffer)))
+
+(defun magit-gh--insert-reviews (pr reviews diff-body)
+  (dolist (review reviews)
+    (magit-insert-section (review review)
+      (magit-insert-heading (format "Review by %s"
+                                    (magit-gh-review-author review)))
+      (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
+                             nil
+                           (magit-gh-review-body review))
+                         (and (equal (magit-gh-review-state review) 'pending)
+                              magit-gh--review-body-placeholder-text))))
+          (magit-insert-section (review-body)
+            (insert (magit-gh--text-with-keymap body
+                                                `(,(kbd "C-c '") . ,'magit-gh--edit-prose)))
+            (insert "\n")))
+      (dolist (comment (magit-gh-review-comments review))
+        (magit-insert-section (comment comment (magit-gh-comment-is-outdated comment))
+          (magit-insert-heading (format "%sComment at %s"
+                                        (if (magit-gh-comment-is-outdated comment)
+                                            "[Outdated] "
+                                          "")
+                                        "<timestamp>"))
+          (insert (magit-gh--propertize-comment-ctx diff-body
+                                                    (magit-gh-pr-diff-range pr)
+                                                    comment))
+          (insert "\n")
+          (insert (magit-gh-comment-text comment))
+          (insert "\n")
+          (insert (format "- %s" (magit-gh-comment-author comment)))
+          (insert "\n"))))))
 
 (defun magit-gh--propertize-comment-ctx (diff-body diff-range comment)
   (let* ((diff-body (if (not (magit-gh-comment-is-outdated comment))
                         diff-body
                       (magit-gh--fetch-diff-for-commit-from-github
+                       (magit-gh--get-current-pr)
                        (magit-gh-comment-commit-sha comment))))
          (diff-range (if (not (magit-gh-comment-is-outdated comment))
                          diff-range
@@ -680,18 +714,25 @@ magit-gh-pulls)"
                                          (point))))
                (format "%s\n%s" file (buffer-substring beg end)))))))
 
-(defun magit-gh-comments--lock-value (pr &rest _args)
-  "Uses the PR as the unique identifier for this magit buffer.
+(defun magit-gh-comments--lock-value (pr action &rest _args)
+  "Uses the PR and ACTION as the unique identifier for this magit buffer.
+
+ACTION is one of :view-pr or :submit-review.
+
 See also `magit-buffer-lock-functions'."
-  pr)
+  (list pr action))
 
 (push (cons 'magit-gh-comments-mode #'magit-gh-comments--lock-value)
       magit-buffer-lock-functions)
 
 (defun magit-gh-comments--buffer-name (mode lock-value)
-  (let ((pr lock-value)
-        (mode-name (cadr (s-match "\\(.+\\)-mode" (symbol-name mode)))))
-    (format "%s: %s/%s"
+  (let* ((pr (car lock-value))
+         (action (cadr lock-value))
+         (mode-name (cadr (s-match "\\(.+\\)-mode" (symbol-name mode))))
+         (fmt (if (equal action :submit-review)
+                  "*Reviewing: %s: %s/%s*"
+                "%s: %s/%s")))
+    (format fmt
             mode-name
             (magit-gh-pr-repo-name pr)
             (magit-gh-pr-pr-number pr))))
@@ -700,7 +741,7 @@ See also `magit-buffer-lock-functions'."
   (interactive)
   (let ((pr (or pr (magit-gh--capture-current-pull-request)))
         (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
-    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr) t)))
+    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr :view-pr) t)))
 
 ;; Review drafts
 
@@ -719,11 +760,35 @@ See also `magit-buffer-lock-functions'."
       (ht-clear! magit-gh--review-drafts)
     (ht-remove! magit-gh--review-drafts pr)))
 
-
-(defun magit-gh--submit-pending-review (&optional body)
+(defun magit-gh-start-review ()
+  (interactive)
   (let* ((pr (magit-gh--get-current-pr))
          (review (magit-gh--get-review-draft pr))
-         (comments (and review (magit-gh-review-comments review))))
+         (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
+    ;; TODO: I'm not happy with this. Split this into two separate minor modes:
+    ;; 1. magit-gh-pr-mode
+    ;; 2. magit-gh-review-mode
+    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr :submit-review) t)))
+
+(defun magit-gh--populate-pending-review (pr)
+  (let* ((pr (magit-gh--get-current-pr))
+         (review (or (magit-gh--get-review-draft pr)
+                     (make-magit-gh-review :state 'pending
+                                           :author "you")))
+         (diff-body (magit-gh--fetch-diff-from-github pr)))
+    (magit-gh--insert-reviews pr (list review) diff-body))
+  (goto-char (point-min)))
+
+(defun magit-gh-submit-review ()
+  (interactive)
+  (let* ((pr (magit-gh--get-current-pr))
+         (review (magit-gh--get-review-draft pr))
+         (comments (and review (magit-gh-review-comments review)))
+         (review-body-section (car (magit-gh--filter-sections
+                                    (lambda (section)
+                                      (equal (oref section type)
+                                             'review-body)))))
+         (body (magit-gh--get-review-body review-body-section)))
     (when (not (or comments body))
       (user-error "There is no pending review for %s - please add a comment before submitting."
                   (magit-gh-pr-to-string pr)))
