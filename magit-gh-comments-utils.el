@@ -28,3 +28,16 @@ The start and end of the overlays are inclusive."
   (interactive)
   (dolist (ov (overlays-at-point))
     (delete-overlay ov)))
+
+;; TODO: This probably doesn't belong here
+(defun magit-gh--text-with-keymap (s &rest bindings)
+  "Propertize string S with BINDINGS added to 'keymap.
+
+Each element of BINDINGS is a dotted pair of a (kbd) keycode and
+a function"
+  (let ((keys (make-sparse-keymap)))
+    (dolist (binding bindings)
+      (define-key keys (car binding) (cdr binding)))
+    (propertize s 'keymap keys)))
+
+(provide 'magit-gh-comments-utils)
