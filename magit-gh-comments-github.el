@@ -8,7 +8,7 @@
 ;; https://developer.github.com/v3/pulls/#list-pull-requests
 ;; TODO: Add title, body, and state (at a minimum)
 (defstruct magit-gh-pr
-  owner
+  owner ;; TODO: Clarify that this is the repo owner, not the PR owner. Maybe we should rename...
   repo-name
   pr-number
   diff-range
@@ -154,11 +154,16 @@ This function modifies and returns its input."
                           :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
                                      ("Accept" . "application/vnd.github.v3.diff"))))
 
-(defun magit-gh--fetch-diff-for-commit-from-github (sha)
-  (magit-gh--request-sync (format "https://api.github.com/repos/astahlman/magit-gh-comments/commits/%s" sha)
+(defun magit-gh--url-for-commit (pr sha)
+  (format "https://api.github.com/repos/%s/%s/commits/%s"
+          (magit-gh-pr-owner pr)
+          (magit-gh-pr-repo-name pr)
+          sha))
+
+(defun magit-gh--fetch-diff-for-commit-from-github (pr sha)
+  (magit-gh--request-sync (magit-gh--url-for-commit pr sha)
                           :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
                                      ("Accept" . "application/vnd.github.v3.diff"))))
-
 
 
 ;; TODO: Get rid of this in favor magit-gh-comment--to-github-format
