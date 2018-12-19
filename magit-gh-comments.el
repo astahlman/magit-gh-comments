@@ -44,14 +44,14 @@
 (require 'magit-gh-comments-utils)
 
 
-(defvar magit-gh-comments-mode-map
+(defvar magit-pull-request-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map magit-mode-map)
     (define-key map "k" 'magit-gh-add-comment)
     map)
-  "Keymap for `magit-gh-comments-mode'.")
+  "Keymap for `magit-pull-request-mode'.")
 
-(define-derived-mode magit-gh-comments-mode magit-mode "Magit Github Comments"
+(define-derived-mode magit-pull-request-mode magit-mode "Magit Pull Request"
   "Mode for looking at a Github Pull Request."
   :group 'magit-gh-comments)
 
@@ -568,7 +568,7 @@ magit-gh-pulls)"
   (and (boundp 'magit-gh--current-pr)
        magit-gh--current-pr))
 
-(defun magit-gh-comments-refresh-buffer (pr action &rest _refresh-args)
+(defun magit-pull-request-refresh-buffer (pr action &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
   (setq-local magit-gh--current-pr pr)
   (if (equal action :view-pr)
@@ -716,7 +716,7 @@ magit-gh-pulls)"
                                          (point))))
                (format "%s\n%s" file (buffer-substring beg end)))))))
 
-(defun magit-gh-comments--lock-value (pr action &rest _args)
+(defun magit-gh-pull-request--lock-value (pr action &rest _args)
   "Uses the PR and ACTION as the unique identifier for this magit buffer.
 
 ACTION is one of :view-pr or :submit-review.
@@ -724,10 +724,10 @@ ACTION is one of :view-pr or :submit-review.
 See also `magit-buffer-lock-functions'."
   (list pr action))
 
-(push (cons 'magit-gh-comments-mode #'magit-gh-comments--lock-value)
+(push (cons 'magit-pull-request-mode #'magit-gh-pull-request--lock-value)
       magit-buffer-lock-functions)
 
-(defun magit-gh-comments--buffer-name (mode lock-value)
+(defun magit-pull-request--buffer-name (mode lock-value)
   (let* ((pr (car lock-value))
          (action (cadr lock-value))
          (mode-name (cadr (s-match "\\(.+\\)-mode" (symbol-name mode))))
@@ -742,8 +742,8 @@ See also `magit-buffer-lock-functions'."
 (defun magit-gh-show-reviews (&optional pr)
   (interactive)
   (let ((pr (or pr (magit-gh--capture-current-pull-request)))
-        (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
-    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr :view-pr) t)))
+        (magit-generate-buffer-name-function #'magit-pull-request--buffer-name))
+    (magit-mode-setup-internal 'magit-pull-request-mode (list pr :view-pr) t)))
 
 ;; Review drafts
 
@@ -766,11 +766,11 @@ See also `magit-buffer-lock-functions'."
   (interactive)
   (let* ((pr (magit-gh--get-current-pr))
          (review (magit-gh--get-review-draft pr))
-         (magit-generate-buffer-name-function #'magit-gh-comments--buffer-name))
+         (magit-generate-buffer-name-function #'magit-pull-request--buffer-name))
     ;; TODO: I'm not happy with this. Split this into two separate minor modes:
     ;; 1. magit-gh-pr-mode
     ;; 2. magit-gh-review-mode
-    (magit-mode-setup-internal 'magit-gh-comments-mode (list pr :submit-review) t)))
+    (magit-mode-setup-internal 'magit-pull-request-mode (list pr :submit-review) t)))
 
 (defun magit-gh--populate-pending-review (pr)
   (let* ((pr (magit-gh--get-current-pr))
