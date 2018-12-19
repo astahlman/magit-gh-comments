@@ -60,7 +60,7 @@ index 9fda99d..f88549a 100644
       (make-magit-gh-pr :owner "astahlman"
                         :pr-number 0
                         :repo-name "magit-gh-comments"
-                        :diff-range "abcdef"))
+                        :diff-range "abcdef..ghijkl"))
 
 (setq magit-gh--test-review-response
       '(((id . 42)
@@ -377,6 +377,7 @@ A comment about the addition of line 15
                                                :gh-pos 1
                                                :text "This comment isn't submitted yet"))
          (pending-review (make-magit-gh-review :body "I'm still working on this review"
+                                               :commit-sha "ghijkl"
                                                :comments (list saved-comment))))
     (magit-gh--store-review-draft pending-review magit-gh--test-pr)
     (should (equal pending-review
@@ -405,9 +406,11 @@ A comment about the addition of line 15
 (setq magit-gh--test-comments
       (let ((comment1 (make-magit-gh-comment :file "f"
                                              :gh-pos 1
+                                             :commit-sha "ghijkl"
                                              :text "Comment 1"))
             (comment2 (make-magit-gh-comment :file "f"
                                              :gh-pos 2
+                                             :commit-sha "ghijkl"
                                              :text "Comment 2")))
         (list comment1 comment2)))
 
@@ -431,6 +434,7 @@ A comment about the addition of line 15
       (should (equal (list magit-gh--test-pr
                            (make-magit-gh-review :body "Super-great job"
                                                  :comments (reverse magit-gh--test-comments)
+                                                 :commit-sha "ghijkl"
                                                  :state 'pending))
                      (car mock-calls))))))
 
@@ -441,3 +445,18 @@ A comment about the addition of line 15
     (magit-gh-start-review)
     (should-error (magit-gh-submit-review) :type 'user-error)))
 
+(ert-deftest magit-gh--test-submission-review-body-only ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (let (mock-calls)
+    (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+                 (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--post-review (lambda (&rest args) (push args mock-calls))))
+      (magit-gh-start-review)
+      (magit-gh--simulate-adding-review-body "Super-great job")
+      (magit-gh-submit-review)
+      (should (equal (list magit-gh--test-pr
+                           (make-magit-gh-review :body "Super-great job"
+                                                 :comments nil
+                                                 :commit-sha "ghijkl"
+                                                 :state 'pending))
+                     (car mock-calls))))))
