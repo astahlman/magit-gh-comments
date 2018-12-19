@@ -585,7 +585,9 @@ magit-gh-pulls)"
   (let ((section-content (magit-gh--section-content-as-string section)))
     (if (get-text-property 0 'magit-gh-is-placeholder section-content)
         nil
-      section-content)))
+      (progn
+        (set-text-properties 0 (length section-content) nil section-content)
+        section-content))))
 
 (defun magit-gh--populate-reviews (pr)
   "Populate and return the magit reviews buffer for the given PR."
@@ -782,17 +784,21 @@ See also `magit-buffer-lock-functions'."
 (defun magit-gh-submit-review ()
   (interactive)
   (let* ((pr (magit-gh--get-current-pr))
-         (review (magit-gh--get-review-draft pr))
+         (review (or (magit-gh--get-review-draft pr)
+                     (make-magit-gh-review :state 'pending
+                                           :commit-sha (cdr (magit-split-range
+                                                             (magit-gh-pr-diff-range pr))))))
          (comments (and review (magit-gh-review-comments review)))
          (review-body-section (car (magit-gh--filter-sections
                                     (lambda (section)
                                       (equal (oref section type)
                                              'review-body)))))
          (body (magit-gh--get-review-body review-body-section)))
+    (when body
+      (setf (magit-gh-review-body review) body))
     (when (not (or comments body))
       (user-error "There is no pending review for %s - please add a comment before submitting."
                   (magit-gh-pr-to-string pr)))
-    (setf (magit-gh-review-body review) body)
     (magit-gh--post-review pr review)))
 
 (provide 'magit-gh-comments)
