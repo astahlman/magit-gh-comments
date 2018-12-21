@@ -246,8 +246,8 @@ Return nil if the line at point is not a hunk-header."
 
 Apply FN to each value in XS-IN, splitting it each time FN
 returns a new value.  Return a list of lists."
-  (let ((max-lisp-eval-depth (max max-lisp-eval-depth 9999))
-        (max-specpdl-size (max max-specpdl-size 9999)))
+  (let ((max-lisp-eval-depth (max max-lisp-eval-depth 99999))
+        (max-specpdl-size (max max-specpdl-size 99999)))
     (if (not xs-in)
         (reverse (cons (reverse (car xs-out)) (cdr xs-out)))
       (cond ((not xs-out)
@@ -442,11 +442,17 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
                                 :offset offset ;;(1- offset)
                                 )))))
 
+(defun magit-gh--section-content-as-string (&optional section include-heading)
+  "Return the content of SECTION as a string.
 
-(defun magit-gh--section-content (section)
-  (buffer-substring-no-properties
-   (magit-section-start section)
-   (magit-section-end section)))
+If SECTION is not supplied, use the value of
+`magit-current-section'."
+  (let ((section (or section (magit-current-section))))
+    (buffer-substring (if include-heading
+                          (oref section start)
+                        (or (oref section content)
+                            (oref section start)))
+                      (oref section end))))
 
 ;;;###autoload
 (defun magit-gh-add-comment (arg comment-text)
@@ -551,7 +557,7 @@ which they came, add them to current magit-diff buffer."
 Assumes we are in a magit-status buffer in the `Pull Requests'
 section, looking at a section of type `pull' (created by
 magit-gh-pulls)"
-  (let ((section-val (magit-section-value (magit-current-section)))
+  (let ((section-val (oref (magit-current-section) value))
         (pr-data (magit-gh-section-req-data)))
     (cl-destructuring-bind (user proj id) section-val
       (make-magit-gh-pr :owner user

@@ -5,7 +5,7 @@
 (defvar magit-review-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map magit-mode-map)
-    (define-key map "C-c C-c" 'magit-gh-submit-review)
+    (define-key map (kbd "C-c C-c") 'magit-gh-submit-review)
     map)
   "Keymap for `magit-review-mode'.")
 
@@ -42,9 +42,10 @@ See also `magit-buffer-lock-functions'."
 
 (defun magit-gh-submit-review ()
   (interactive)
-  (let* ((pr (magit-gh--get-current-pr))
+  (let* ((state 'comment) ;; TODO: Make this configurable
+         (pr (magit-gh--get-current-pr))
          (review (or (magit-gh--get-review-draft pr)
-                     (make-magit-gh-review :state 'pending
+                     (make-magit-gh-review :state state
                                            :commit-sha (cdr (magit-split-range
                                                              (magit-gh-pr-diff-range pr))))))
          (comments (and review (magit-gh-review-comments review)))
