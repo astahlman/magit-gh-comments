@@ -1,5 +1,6 @@
 ;;; test-helper.el --- Helpers for magit-gh-comments-test.el
 
+(require 's)
 (require 'magit)
 
 (defun magit-gh--looking-at-p (s)

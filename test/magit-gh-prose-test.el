@@ -1,4 +1,5 @@
 (require 'cl)
+(require 'subr-x)
 (require 'magit-gh-comments-prose)
 
 (defmacro with-point-on-magit-section (content &rest body)
