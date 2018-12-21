@@ -462,5 +462,5 @@ A comment about the addition of line 15
                            (make-magit-gh-review :body "Super-great job"
                                                  :comments nil
                                                  :commit-sha "ghijkl"
-                                                 :state 'pending))
+                                                 :state 'comment))
                      (car mock-calls))))))
