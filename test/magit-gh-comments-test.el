@@ -1,11 +1,14 @@
 ;; -*- lexical-binding: t -*-
 
 (require 'ert)
-(require 'magit-gh-comments)
-;; (require 'magit-gh-comments-diff)
+(require 'subr-x)
+(require 'magit-gh-comments-core)
+(require 'magit-pull-request)
+(require 'magit-review)
 
 ;; For running tests interactively
-;; (load "test/test-helper")
+(load-file (expand-file-name "test-helper.el"
+                             (file-name-directory (or load-file-name buffer-file-name))))
 
 (ert-deftest test-magit->gh/boundary-conditions ()
   (let* ((diff-body "diff --git a/f b/f
@@ -277,15 +280,15 @@ index 9fda99d..f88549a 100644
 (ert-deftest magit-gh--test-populate-reviews-buffer ()
   (setq magit-gh--request-cache nil)
   (let ((magit-gh--current-pr magit-gh--test-pr)
-        (expected-buf-name "magit-gh-comments: magit-gh-comments/0")
+        (expected-buf-name "PR: magit-gh-comments (#0)")
         magit-diff-calls
         visit-diff-pos-calls)
     (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
                  (magit-diff (lambda (&rest args)
                                (setq magit-diff-calls
                                      (cons args magit-diff-calls))))
+                 (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
                  (magit-git-insert (lambda (&rest args)
-                                     ;; TODO: a dedent function would be nice, here
                                      (insert (s-dedent "\
                                                 a                |  5 +++--
                                                 another-file     |  7 +++++++
@@ -296,6 +299,7 @@ index 9fda99d..f88549a 100644
       (when-let ((buf (get-buffer expected-buf-name)))
         (kill-buffer buf))
       (magit-gh-show-reviews magit-gh--test-pr)
+      (should (string= expected-buf-name (buffer-name)))
       (goto-char (point-min))
       ;; PR Title and description
       (should (magit-gh--looking-at-p (regexp-quote "PR Title (#0) [OPEN]")))
@@ -458,5 +462,5 @@ A comment about the addition of line 15
                            (make-magit-gh-review :body "Super-great job"
                                                  :comments nil
                                                  :commit-sha "ghijkl"
-                                                 :state 'pending))
+                                                 :state 'comment))
                      (car mock-calls))))))

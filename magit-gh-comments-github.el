@@ -291,6 +291,7 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                                                     :original-gh-pos (alist-get :original_position comment)
                                                     :is-outdated (not (alist-get :position comment))))
                            comments)))
+    ;; FIXME: This is broken - comments do not have to be associated with a review
     (dolist (comment comments)
       (let* ((review-id (magit-gh-comment-review-id comment))
              (review (ht-get review-id->review review-id)))
@@ -314,11 +315,13 @@ API reference: https://developer.github.com/v3/pulls/reviews/#input"
 API reference: https://developer.github.com/v3/pulls/reviews/#example"
   (let ((url (magit-gh--url-for-pr-reviews pr))
         (payload `((:commit_id . ,(magit-gh-review-commit-sha review))
-                   (:body . ,(magit-gh-review-body review))
-                   (:comments . ,(mapcar #'magit-gh-comment--to-github-format
-                                         (magit-gh-review-comments review))))))
-    (when-let ((event (magit-gh-review-state review)))
-      (push `(:event . ,event) payload))
+                   (:body . ,(magit-gh-review-body review)))))
+    (when-let ((comments (mapcar #'magit-gh-comment--to-github-format
+                                 (magit-gh-review-comments review))))
+      (push `(:comments . ,comments) payload))
+    (when-let ((event (and (not (equal 'pending (magit-gh-review-state review)))
+                           (magit-gh-review-state review))))
+      (push `(:event . ,(s-upcase (symbol-name event))) payload))
     (request url
              :type "POST"
              :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
