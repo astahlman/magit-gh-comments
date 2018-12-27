@@ -138,16 +138,15 @@ function returns."
   (cdr (assoc key (plist-get request-args :headers))))
 
 (defun magit-gh--hydrate-pr-from-github (pr)
-  "Hydrate PR with additional fields fetched from Github.
-
-This function modifies and returns its input."
+  "Hydrate PR with additional fields fetched from Github."
   (let ((response (magit-gh--request-sync (magit-gh--url-for-pr pr)
                                           :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
-                                          :parser #'json-read)))
-    (setf (magit-gh-pr-body pr) (alist-get :body response))
-    (setf (magit-gh-pr-title pr) (alist-get :title response))
-    (setf (magit-gh-pr-state pr) (alist-get :state response))
-    pr))
+                                          :parser #'json-read))
+        (result (copy-magit-gh-pr pr)))
+    (setf (magit-gh-pr-body result) (alist-get :body response))
+    (setf (magit-gh-pr-title result) (alist-get :title response))
+    (setf (magit-gh-pr-state result) (alist-get :state response))
+    result))
 
 (defun magit-gh--fetch-diff-from-github (pr)
   (magit-gh--request-sync (magit-gh--url-for-pr pr)

@@ -25,7 +25,11 @@
   "Uses the PR as the unique identifier for this magit buffer.
 
 See also `magit-buffer-lock-functions'."
-  pr)
+  (let ((_pr (car pr)))
+    (list
+     (magit-gh-pr-owner _pr)
+     (magit-gh-pr-repo-name _pr)
+     (magit-gh-pr-pr-number _pr))))
 
 ;;;###autoload
 (push (cons 'magit-pull-request-mode #'magit-gh-pull-request--lock-value)
@@ -33,9 +37,8 @@ See also `magit-buffer-lock-functions'."
 
 (defun magit-pull-request-refresh-buffer (pr &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
-  (setq-local magit-gh--current-pr pr)
-  (magit-gh--hydrate-pr-from-github pr)
-  (magit-gh--populate-reviews pr))
+  (setq-local magit-gh--current-pr (magit-gh--hydrate-pr-from-github pr))
+  (magit-gh--populate-reviews magit-gh--current-pr))
 
 (defun magit-gh--populate-reviews (pr)
   "Populate and return the magit reviews buffer for the given PR."

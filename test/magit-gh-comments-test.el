@@ -425,7 +425,7 @@ A comment about the addition of line 15
                  (reverse magit-gh--test-comments))))
 
 
-(ert-deftest magit-gh--test-submit-pending-comments ()
+(ert-deftest magit-gh--test-submit-pending-comments-with-body ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
   (let (mock-calls)
     (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
@@ -439,8 +439,37 @@ A comment about the addition of line 15
                            (make-magit-gh-review :body "Super-great job"
                                                  :comments (reverse magit-gh--test-comments)
                                                  :commit-sha "ghijkl"
-                                                 :state 'pending))
+                                                 :state 'comment))
                      (car mock-calls))))))
+
+(ert-deftest magit-gh--test-submit-pending-comments-without-body ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (let (mock-calls)
+    (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+                 (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--post-pr-comment (lambda (&rest args) (push args mock-calls))))
+      (magit-gh--simulate-adding-comments magit-gh--test-comments)
+      (magit-gh-start-review)
+      (magit-gh-submit-review)
+      (should (= (length mock-calls)
+                 (length magit-gh--test-comments)))
+      (-zip-with (lambda (kall comment)
+                   (-let [(pr filename commit-id gh-pos comment-text) kall]
+                     (should (equal gh-pos (magit-gh-comment-gh-pos comment)))
+                     (should (equal comment-text (magit-gh-comment-text comment)))
+                     (should (equal filename (magit-gh-comment-file comment)))
+                     (should (equal commit-id (magit-gh-comment-commit-sha comment)))))
+                 mock-calls
+                 magit-gh--test-comments))))
+
+(ert-deftest magit-gh--test-review-buffer-persistence ()
+  (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+               (magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
+    (magit-gh-show-reviews magit-gh--test-pr)
+    (let ((review-buf (current-buffer)))
+      (should (string= (buffer-name review-buf) "PR: magit-gh-comments (#0)"))
+      (magit-gh-show-reviews magit-gh--test-pr)
+      (should (equal review-buf (current-buffer))))))
 
 (ert-deftest magit-gh--test-submission-rejected-if-empty ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
