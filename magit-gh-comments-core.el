@@ -77,10 +77,16 @@
     map))
 
 (defun magit-pull-request--buffer-name (mode lock-value)
-  (let ((pr (car lock-value)))
+  (-let [(owner repo-name number) lock-value]
     (format "PR: %s (#%s)"
-            (magit-gh-pr-repo-name pr)
-            (magit-gh-pr-pr-number pr))))
+            repo-name
+            number)))
+
+(defun magit-review--buffer-name (mode lock-value)
+  (-let [(owner repo-name number) lock-value]
+    (format "PR Review: %s (#%s)"
+            repo-name
+            number)))
 
 ;;;###autoload
 (defun magit-gh-show-reviews (&optional pr)
@@ -592,6 +598,7 @@ magit-gh-pulls)"
       (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
                              nil
                            (magit-gh-review-body review))
+                         ;; TOOD: Change this?
                          (and (equal (magit-gh-review-state review) 'pending)
                               magit-gh--review-body-placeholder-text))))
           (magit-insert-section (review-body)
@@ -707,7 +714,7 @@ magit-gh-pulls)"
 (defun magit-gh-start-review ()
   (interactive)
   (let ((pr (magit-gh--get-current-pr))
-        (magit-generate-buffer-name-function #'magit-pull-request--buffer-name))
+        (magit-generate-buffer-name-function #'magit-review--buffer-name))
     (magit-mode-setup-internal 'magit-review-mode (list pr) t)))
 
 (provide 'magit-gh-comments-core)

@@ -22,7 +22,11 @@
   "Use the PR as the unique identifier for this magit buffer.
 
 See also `magit-buffer-lock-functions'."
-  pr)
+  (let ((_pr (car pr)))
+    (list
+     (magit-gh-pr-owner _pr)
+     (magit-gh-pr-repo-name _pr)
+     (magit-gh-pr-pr-number _pr))))
 
 (push (cons 'magit-review-mode #'magit-gh-review--lock-value)
       magit-buffer-lock-functions)
@@ -34,8 +38,7 @@ See also `magit-buffer-lock-functions'."
 (defun magit-gh--populate-pending-review (pr)
   (let* ((pr (magit-gh--get-current-pr))
          (review (or (magit-gh--get-review-draft pr)
-                     (make-magit-gh-review :state 'pending
-                                           :author "you")))
+                     (make-magit-gh-review :state 'pending)))
          (diff-body (magit-gh--fetch-diff-from-github pr)))
     (magit-gh--insert-reviews pr (list review) diff-body))
   (goto-char (point-min)))
@@ -60,6 +63,7 @@ See also `magit-buffer-lock-functions'."
     (if body
         (progn
           (setf (magit-gh-review-body review) body)
+          (setf (magit-gh-review-state review) state)
           (magit-gh--post-review pr review))
       ;; else post comments individually, sans review
       (dolist (comment comments)
@@ -67,6 +71,8 @@ See also `magit-buffer-lock-functions'."
                                    (magit-gh-comment-file comment)
                                    (magit-gh-comment-commit-sha comment)
                                    (magit-gh-comment-gh-pos comment)
-                                   (magit-gh-comment-text comment))))))
+                                   (magit-gh-comment-text comment))))
+    (magit-gh--discard-review-draft pr)
+    (magit-kill-this-buffer)))
 
 (provide 'magit-review)
