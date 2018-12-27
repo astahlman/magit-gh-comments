@@ -598,7 +598,6 @@ magit-gh-pulls)"
       (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
                              nil
                            (magit-gh-review-body review))
-                         ;; TOOD: Change this?
                          (and (equal (magit-gh-review-state review) 'pending)
                               magit-gh--review-body-placeholder-text))))
           (magit-insert-section (review-body)
