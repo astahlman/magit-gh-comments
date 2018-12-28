@@ -478,6 +478,12 @@ A comment about the addition of line 15
     (magit-gh-start-review)
     (should-error (magit-gh-submit-review) :type 'user-error)))
 
+(ert-deftest magit-gh--test-submission-rejected-if-review-not-started ()
+  (magit-gh--discard-review-draft magit-gh--test-pr)
+  (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
+               (magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
+    (should-error (magit-gh-submit-review) :type 'user-error)))
+
 (ert-deftest magit-gh--test-submission-review-body-only ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
   (let (mock-calls)
