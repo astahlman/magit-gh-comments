@@ -73,7 +73,7 @@
 ;;;###autoload
 (setq magit-pull-section-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [remap magit-visit-thing]      'magit-gh-show-reviews)
+    (define-key map [remap magit-visit-thing]      'magit-gh-show-pr)
     map))
 
 (defun magit-pull-request--buffer-name (mode lock-value)
@@ -89,7 +89,7 @@
             number)))
 
 ;;;###autoload
-(defun magit-gh-show-reviews (&optional pr)
+(defun magit-gh-show-pr (&optional pr)
   (interactive)
   (let ((pr (or pr (magit-gh--capture-current-pull-request)))
         (magit-generate-buffer-name-function #'magit-pull-request--buffer-name))
