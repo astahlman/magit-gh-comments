@@ -45,6 +45,8 @@ See also `magit-buffer-lock-functions'."
 
 (defun magit-gh-submit-review ()
   (interactive)
+  (when (not (derived-mode-p 'magit-review-mode))
+    (user-error "Start a review with `magit-start-review' before submitting."))
   (let* ((state 'comment) ;; TODO: Make this configurable
          (pr (magit-gh--get-current-pr))
          (review (or (magit-gh--get-review-draft pr)
