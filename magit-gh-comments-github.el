@@ -64,17 +64,22 @@
 
 ;; TODO: Put this back, just don't want to wipe out my cache without wifi
 (setq magit-gh--request-cache nil)
+(defvar magit-gh--should-skip-cache nil
+  "Dynamically bind to `t' to invalidate the cached response (if
+  present) force a new fetch from the Github API")
+
 (cl-defun magit-gh--request-sync (url &rest request-args)
-   (let ((response (or (cdr (assoc (list url request-args) magit-gh--request-cache))
-                         (let ((http-result (apply #'magit-gh--request-sync-internal url request-args)))
-                           (map-put magit-gh--request-cache
-                                    (list url request-args)
-                                    http-result)
-                           http-result))))
-       (if (listp response)
-           (magit-gh--remove-carriage-returns
-            (magit-gh--keys->keywords response))
-         response)))
+  (let ((response (or (and (not magit-gh--should-skip-cache)
+                           (cdr (assoc (list url request-args) magit-gh--request-cache)))
+                      (let ((http-result (apply #'magit-gh--request-sync-internal url request-args)))
+                        (map-put magit-gh--request-cache
+                                 (list url request-args)
+                                 http-result)
+                        http-result))))
+    (if (listp response)
+        (magit-gh--remove-carriage-returns
+         (magit-gh--keys->keywords response))
+      response)))
 
 (defun magit-gh--remove-carriage-returns (l)
   "Recursively remove ^M from any strings in list L"

@@ -376,6 +376,25 @@ A comment about the addition of line 15
                                                       :hunk-start 10
                                                       :offset 5))))))))
 
+(ert-deftest test-magit-gh--skip-cache-on-reload-pull-request ()
+  (setq magit-gh--request-cache nil)
+  (let ((call-counts (ht-create)))
+    (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--request-sync-internal
+                  (lambda (url &rest request-args)
+                    (ht-set! call-counts url (1+ (ht-get call-counts url 0)))
+                    (apply #'mock-github-api url request-args))))
+      ;; TODO: Rename this to show PR?
+      (magit-gh-show-reviews magit-gh--test-pr)
+      ;; once to hydrate the PR, once to fetch diff
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr magit-gh--test-pr) 0)))
+      (should (= 1 (ht-get call-counts (magit-gh--url-for-pr-reviews magit-gh--test-pr) 0)))
+      (should (= 1 (ht-get call-counts (magit-gh--url-for-pr-comments magit-gh--test-pr) 0)))
+      (magit-pull-request-reload-from-github)
+      (should (= 4 (ht-get call-counts (magit-gh--url-for-pr magit-gh--test-pr) 0)))
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr-reviews magit-gh--test-pr) 0)))
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr-comments magit-gh--test-pr) 0))))))
+
 (ert-deftest magit-gh--test-fetch-review-draft ()
   (let* ((saved-comment (make-magit-gh-comment :file "f"
                                                :gh-pos 1
