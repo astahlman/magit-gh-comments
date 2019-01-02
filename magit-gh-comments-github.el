@@ -268,6 +268,7 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
 
 (defun magit-gh--list-reviews (pr)
   "Return a list of reviews on the given PR."
+  (setq magit-gh--request-cache nil)
   (let* ((reviews (magit-gh--request-sync
                    (magit-gh--url-for-pr-reviews pr)
                    :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
@@ -286,7 +287,8 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                     :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                     :parser #'magit-gh--parse-json-array))
          (comments (mapcar (lambda (comment)
-                             (make-magit-gh-comment :review-id (alist-get :pull_request_review_id comment)
+                             (make-magit-gh-comment :id (alist-get :id comment)
+                                                    :review-id (alist-get :pull_request_review_id comment)
                                                     :file (alist-get :path comment)
                                                     :commit-sha (alist-get :original_commit_id comment)
                                                     :gh-pos (alist-get :position comment)

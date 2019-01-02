@@ -139,4 +139,9 @@ buzz"
   (should (equalp "foo" (s-dedent "  foo")))
   (should (equalp "foo" (s-dedent "foo"))))
 
+(defun magit-gh--simulate-command (key &rest args)
+  "Simulate the interactive command bound to KEY and supply ARGS"
+  (let ((response-fn (key-binding key t)))
+    (apply response-fn args)))
+
 ;;; test-helper.el ends here

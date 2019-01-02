@@ -48,6 +48,7 @@
 ;; - OFFSET is the # of lines *below* the hunk header, i.e., the first line in a hunk is at offset=1
 (defstruct magit-gh-diff-pos a-or-b hunk-start offset)
 
+;; - ID is the comment identifier from Github
 ;; - REVIEW-ID is the review identifier from Github
 ;; - FILE is the name of the file to which the comment applies
 ;; - COMMIT-SHA is the SHA of the git commit to which the comment applies
@@ -56,7 +57,9 @@
 ;; - GH-POS is the Github position of the comment (an integer)
 ;; - ORIGINAL-GH-POS is only set if this comment is outdated
 ;; - IS-OUTDATED is t iff the comment does not apply to the most recent commit
+;; - IN-REPLY-TO if this comment belongs to a thread, this is the ID of the original comment
 (defstruct magit-gh-comment
+  id
   review-id
   file
   commit-sha
@@ -64,7 +67,8 @@
   author
   gh-pos
   original-gh-pos
-  is-outdated)
+  is-outdated
+  in-reply-to)
 
 ;; [Ugly hack]: redefine the pull-section keymap from magit-gh-pulls.el
 ;; Instead of jumping to a magit-diff, we'll open a buffer that shows all
@@ -461,6 +465,20 @@ If SECTION is not supplied, use the value of
                       (oref section end))))
 
 ;;;###autoload
+(defun magit-gh-reply-to-comment (id comment-text)
+  "Reply to the comment with ID with COMMENT-TEXT"
+  (let* ((comment (make-magit-gh-comment :in-reply-to id
+                                         :text comment-text))
+         (current-pr (magit-gh--get-current-pr))
+         (commit-sha (cdr (magit-split-range (magit-diff--dwim))))
+         (pending-review (or (magit-gh--get-review-draft current-pr)
+                             (make-magit-gh-review :commit-sha commit-sha
+                                                   :state 'pending))))
+    (setf (magit-gh-review-comments pending-review)
+          (cons comment (magit-gh-review-comments pending-review)))
+    (magit-gh--store-review-draft pending-review current-pr)))
+
+;;;###autoload
 (defun magit-gh-add-comment (arg comment-text)
   "Comment on the line at point and post COMMENT-TEXT to Github.
 
@@ -615,10 +633,21 @@ magit-gh-pulls)"
                                                     (magit-gh-pr-diff-range pr)
                                                     comment))
           (insert "\n")
-          (insert (magit-gh-comment-text comment))
+          (insert (magit-gh--propertize-comment-text (magit-gh-comment-text comment)))
           (insert "\n")
           (insert (format "- %s" (magit-gh-comment-author comment)))
           (insert "\n"))))))
+
+(defun magit-gh--propertize-comment-text (text)
+  "Setup keybindings that allow quick reply-to"
+  (let ((keymap (make-sparse-keymap)))
+    (define-key keymap (kbd "R")
+      (lambda (response-text)
+        (interactive "MReply: ")
+        (let* ((comment (oref (magit-current-section) value))
+               (id (magit-gh-comment-id comment)))
+          (magit-gh-reply-to-comment id response-text))))
+    (propertize text 'keymap keymap)))
 
 (defun magit-gh--propertize-comment-ctx (diff-body diff-range comment)
   (let* ((diff-body (if (not (magit-gh-comment-is-outdated comment))
