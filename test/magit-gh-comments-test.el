@@ -104,6 +104,12 @@ def foo():
          (position . nil)
          (original_position . 10)
          (original_commit_id . "abcdef")
+         (user (login . "spiderman")))
+        ((id . 4)
+         (pull_request_review_id . 43)
+         (body . "A response to a comment about the removal of line 2")
+         (in_reply_to . 1)
+         (original_commit_id . "abcdef")
          (user (login . "spiderman")))))
 
 (setq
@@ -348,6 +354,10 @@ A comment about the removal of line 2
                                                       :offset 2))))
         (should (equal (caar magit-diff-calls)
                        (magit-gh-pr-diff-range magit-gh--test-pr))))
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'comment))
+      (should (magit-gh--looking-at-p "A response to a comment about the removal of line 2
+- spiderman"))
       (magit-gh--section-search-forward
        (magit-gh--section-type-matcher 'review))
       (should (magit-gh--looking-at-p "Review by spiderman"))
