@@ -298,7 +298,7 @@ index 9fda99d..f88549a 100644
                                                    (cons args visit-diff-pos-calls)))))
       (when-let ((buf (get-buffer expected-buf-name)))
         (kill-buffer buf))
-      (magit-gh-show-reviews magit-gh--test-pr)
+      (magit-gh-show-pr magit-gh--test-pr)
       (should (string= expected-buf-name (buffer-name)))
       (goto-char (point-min))
       ;; PR Title and description
@@ -375,6 +375,24 @@ A comment about the addition of line 15
                        `("f" ,(make-magit-gh-diff-pos :a-or-b :b
                                                       :hunk-start 10
                                                       :offset 5))))))))
+
+(ert-deftest test-magit-gh--skip-cache-on-reload-pull-request ()
+  (setq magit-gh--request-cache nil)
+  (let ((call-counts (ht-create)))
+    (with-mocks ((magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-gh--request-sync-internal
+                  (lambda (url &rest request-args)
+                    (ht-set! call-counts url (1+ (ht-get call-counts url 0)))
+                    (apply #'mock-github-api url request-args))))
+      (magit-gh-show-pr magit-gh--test-pr)
+      ;; once to hydrate the PR, once to fetch diff
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr magit-gh--test-pr) 0)))
+      (should (= 1 (ht-get call-counts (magit-gh--url-for-pr-reviews magit-gh--test-pr) 0)))
+      (should (= 1 (ht-get call-counts (magit-gh--url-for-pr-comments magit-gh--test-pr) 0)))
+      (magit-pull-request-reload-from-github)
+      (should (= 4 (ht-get call-counts (magit-gh--url-for-pr magit-gh--test-pr) 0)))
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr-reviews magit-gh--test-pr) 0)))
+      (should (= 2 (ht-get call-counts (magit-gh--url-for-pr-comments magit-gh--test-pr) 0))))))
 
 (ert-deftest magit-gh--test-fetch-review-draft ()
   (let* ((saved-comment (make-magit-gh-comment :file "f"
@@ -465,10 +483,10 @@ A comment about the addition of line 15
 (ert-deftest magit-gh--test-review-buffer-persistence ()
   (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
                (magit-gh--get-current-pr (lambda () magit-gh--test-pr)))
-    (magit-gh-show-reviews magit-gh--test-pr)
+    (magit-gh-show-pr magit-gh--test-pr)
     (let ((review-buf (current-buffer)))
       (should (string= (buffer-name review-buf) "PR: magit-gh-comments (#0)"))
-      (magit-gh-show-reviews magit-gh--test-pr)
+      (magit-gh-show-pr magit-gh--test-pr)
       (should (equal review-buf (current-buffer))))))
 
 (ert-deftest magit-gh--test-submission-rejected-if-empty ()
