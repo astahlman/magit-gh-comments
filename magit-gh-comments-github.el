@@ -62,8 +62,9 @@
 (defun magit-gh--url-for-pr-reviews (pr)
   (format "%s/reviews" (magit-gh--url-for-pr pr)))
 
-;; TODO: Put this back, just don't want to wipe out my cache without wifi
-(setq magit-gh--request-cache nil)
+(defvar magit-gh--request-cache nil
+  "An alist mapping HTTP requests to responses")
+
 (defvar magit-gh--should-skip-cache nil
   "Dynamically bind to `t' to invalidate the cached response (if
   present) force a new fetch from the Github API")
@@ -171,18 +172,20 @@ function returns."
 
 
 ;; TODO: Get rid of this in favor magit-gh-comment--to-github-format
-(defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text)
+(defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text in-reply-to)
   (json-encode `((:body . ,comment-text)
                  (:commit_id . ,commit-sha)
                  (:path . ,filename)
-                 (:position . ,gh-pos))))
+                 (:position . ,gh-pos)
+                 (:in_reply_to . ,in-reply-to))))
 
-(defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text)
+(defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text &optional in-reply-to)
   (let ((url (magit-gh--url-for-pr-comments pr))
         (json-payload (magit-gh--comment-as-json filename
                                                  commit-id
                                                  gh-pos
-                                                 comment-text)))
+                                                 comment-text
+                                                 in-reply-to)))
     (request url
      :type "POST"
      :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
@@ -286,19 +289,35 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                     :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
                     :parser #'magit-gh--parse-json-array))
          (comments (mapcar (lambda (comment)
-                             (make-magit-gh-comment :review-id (alist-get :pull_request_review_id comment)
+                             (make-magit-gh-comment :id (alist-get :id comment)
+                                                    :review-id (alist-get :pull_request_review_id comment)
                                                     :file (alist-get :path comment)
                                                     :commit-sha (alist-get :original_commit_id comment)
                                                     :gh-pos (alist-get :position comment)
                                                     :text (alist-get :body comment)
                                                     :author (cdr (magit-gh--assoc-recursive '(:user :login) comment))
+                                                    :created-at (alist-get :created_at comment)
                                                     :original-gh-pos (alist-get :original_position comment)
-                                                    :is-outdated (not (alist-get :position comment))))
+                                                    :is-outdated (and
+                                                                  (not (alist-get :position comment))
+                                                                  (not (alist-get :in_reply_to_id comment)))
+                                                    :in-reply-to (alist-get :in_reply_to_id comment)))
                            comments)))
-    ;; FIXME: This is broken - comments do not have to be associated with a review
     (dolist (comment comments)
       (let* ((review-id (magit-gh-comment-review-id comment))
-             (review (ht-get review-id->review review-id)))
+             (review (or (ht-get review-id->review review-id)
+                         ;; Hack: Comments do not have to be
+                         ;; associated with a review, so we create one
+                         ;; on the fly.
+
+                         ;; TODO: Unit test this - remove the (or) to
+                         ;; expose the bug
+                         (let ((review (make-magit-gh-review :id review-id
+                                                             :author (magit-gh-comment-author comment))))
+                           (ht-set! review-id->review
+                                    review-id
+                                    review)
+                           review))))
         (push comment (magit-gh-review-comments review))))
     (magit-gh--sort (ht-values review-id->review) #'magit-gh-review-id)))
 

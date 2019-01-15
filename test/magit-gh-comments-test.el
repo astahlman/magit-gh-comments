@@ -85,23 +85,35 @@ def foo():
          (commit_id . "562b1f07ede9c579ae5ec2d79a07879dd7a0d031"))))
 
 (setq magit-gh--test-comments-response
-      '(((pull_request_review_id . 42)
+      '(((id . 1)
+         (pull_request_review_id . 42)
          (body . "A comment about the removal of line 2")
          (path . "f")
          (position . 2)
-         (user (login . "astahlman")))
-        ((pull_request_review_id . 43)
+         (user (login . "astahlman"))
+         (created_at . "2019-01-01T00:00:00Z"))
+        ((id . 2)
+         (pull_request_review_id . 43)
          (body . "A comment about the addition of line 15")
          (path . "f")
          (position . 9)
-         (user (login . "spiderman")))
-        ((pull_request_review_id . 43)
+         (user (login . "spiderman"))
+         (created_at . "2019-01-01T00:00:00Z"))
+        ((id . 3)
+         (pull_request_review_id . 43)
          (body . "Some other comment that's been resolved")
          (path . "f")
          (position . nil)
          (original_position . 10)
          (original_commit_id . "abcdef")
-         (user (login . "spiderman")))))
+         (user (login . "spiderman"))
+         (created_at . "2019-01-01T00:00:00Z"))
+        ((id . 4)
+         (pull_request_review_id . 43)
+         (body . "A response to a comment about the removal of line 2")
+         (in_reply_to_id . 1)
+         (user (login . "spiderman"))
+         (created_at . "2019-01-01T00:00:00Z"))))
 
 (setq
 
@@ -181,35 +193,39 @@ With a carriage-return + line-feed.")
 
 (ert-deftest test-magit-gh--github-fetch-comments ()
   ;; TODO: Test against the comment context given this diff body
-  (let* ((diff-body magit-gh--test-diff-body)
-         (sort-pred (lambda (x y)
-                      (if (equal (magit-gh-comment-review-id x)
-                                 (magit-gh-comment-review-id y))
-                          (string< (magit-gh-comment-text x)
-                                   (magit-gh-comment-text y))
-                        (< (magit-gh-comment-review-id x)
-                           (magit-gh-comment-review-id y)))))
-         (retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
-                               (magit-gh--list-comments magit-gh--test-pr)))
-         (retrieved-comments (sort retrieved-comments sort-pred))
-         (expected-comments (list (make-magit-gh-comment :review-id 42
-                                                         :author "astahlman"
-                                                         :text "A comment about the removal of line 2"
-                                                         :file "f"
-                                                         :gh-pos 2)
-                                  (make-magit-gh-comment :review-id 43
-                                                         :author "spiderman"
-                                                         :text "A comment about the addition of line 15"
-                                                         :file "f"
-                                                         :gh-pos 9)
-                                  (make-magit-gh-comment :review-id 43
-                                                         :author "spiderman"
-                                                         :text "Some other comment that's been resolved"
-                                                         :file "f"
-                                                         :is-outdated t
-                                                         :original-gh-pos 10
-                                                         :commit-sha "abcdef"))))
-    (should (equal expected-comments retrieved-comments))))
+  (let ((retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
+                              (magit-gh--list-comments magit-gh--test-pr)))
+        (expected-comments (list (make-magit-gh-comment :id 1
+                                                        :review-id 42
+                                                        :author "astahlman"
+                                                        :text "A comment about the removal of line 2"
+                                                        :file "f"
+                                                        :gh-pos 2
+                                                        :created-at "2019-01-01T00:00:00Z")
+                                 (make-magit-gh-comment :id 2
+                                                        :review-id 43
+                                                        :author "spiderman"
+                                                        :text "A comment about the addition of line 15"
+                                                        :file "f"
+                                                        :gh-pos 9
+                                                        :created-at "2019-01-01T00:00:00Z")
+                                 (make-magit-gh-comment :id 3
+                                                        :review-id 43
+                                                        :author "spiderman"
+                                                        :text "Some other comment that's been resolved"
+                                                        :file "f"
+                                                        :is-outdated t
+                                                        :original-gh-pos 10
+                                                        :commit-sha "abcdef"
+                                                        :created-at "2019-01-01T00:00:00Z")
+                                 (make-magit-gh-comment :id 4
+                                                        :review-id 43
+                                                        :author "spiderman"
+                                                        :text "A response to a comment about the removal of line 2"
+                                                        :in-reply-to 1
+                                                        :created-at "2019-01-01T00:00:00Z"))))
+    (should (equal expected-comments
+                   (magit-gh--sort retrieved-comments #'magit-gh-comment-id)))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
@@ -342,6 +358,10 @@ A comment about the removal of line 2
                                                       :offset 2))))
         (should (equal (caar magit-diff-calls)
                        (magit-gh-pr-diff-range magit-gh--test-pr))))
+      (magit-gh--section-search-forward
+       (magit-gh--section-type-matcher 'comment))
+      (should (magit-gh--looking-at-p "A response to a comment about the removal of line 2
+- spiderman"))
       (magit-gh--section-search-forward
        (magit-gh--section-type-matcher 'review))
       (should (magit-gh--looking-at-p "Review by spiderman"))
@@ -498,6 +518,32 @@ A comment about the addition of line 15
 
 (ert-deftest magit-gh--test-submission-rejected-if-review-not-started ()
   (should-error (magit-gh-submit-review) :type 'user-error))
+
+(ert-deftest magit-gh--test-reply-to-comment ()
+  (let ((expected-buf-name "PR: magit-gh-comments (#0)")
+        post-comment-calls)
+    (with-mocks ((magit-diff--dwim (lambda () (magit-gh-pr-diff-range magit-gh--test-pr)))
+                 (magit-gh--request-sync-internal #'mock-github-api)
+                 (magit-diff (lambda (&rest args)
+                               (setq magit-diff-calls
+                                     (cons args magit-diff-calls))))
+                 (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
+                 (magit-git-insert (lambda (&rest args)
+                                     (insert (s-dedent "\
+                                                a                |  5 +++--
+                                                another-file     |  7 +++++++
+                                                2 files changed, 10 insertions(+), 2 deletions(-)") ))))
+      (when-let ((buf (get-buffer expected-buf-name)))
+        (kill-buffer buf))
+      (magit-gh-show-pr magit-gh--test-pr)
+      (save-excursion
+        (re-search-forward "A comment about the removal of line 2")
+        (beginning-of-line)
+        (magit-gh--simulate-command (kbd "R") "A response"))
+      (let* ((review (magit-gh--get-review-draft magit-gh--test-pr))
+             (comment1 (car (magit-gh-review-comments review))))
+        (should (= (magit-gh-comment-in-reply-to comment1) 1))
+        (should (string= (magit-gh-comment-text comment1) "A response"))))))
 
 (ert-deftest magit-gh--test-submission-review-body-only ()
   (magit-gh--discard-review-draft magit-gh--test-pr)

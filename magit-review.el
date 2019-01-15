@@ -73,7 +73,8 @@ See also `magit-buffer-lock-functions'."
                                    (magit-gh-comment-file comment)
                                    (magit-gh-comment-commit-sha comment)
                                    (magit-gh-comment-gh-pos comment)
-                                   (magit-gh-comment-text comment))))
+                                   (magit-gh-comment-text comment)
+                                   (magit-gh-comment-in-reply-to comment))))
     (magit-gh--discard-review-draft pr)
     (magit-kill-this-buffer)))
 
