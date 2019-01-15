@@ -62,8 +62,9 @@
 (defun magit-gh--url-for-pr-reviews (pr)
   (format "%s/reviews" (magit-gh--url-for-pr pr)))
 
-;; TODO: Put this back, just don't want to wipe out my cache without wifi
-(setq magit-gh--request-cache nil)
+(defvar magit-gh--request-cache nil
+  "An alist mapping HTTP requests to responses")
+
 (defvar magit-gh--should-skip-cache nil
   "Dynamically bind to `t' to invalidate the cached response (if
   present) force a new fetch from the Github API")
@@ -171,18 +172,20 @@ function returns."
 
 
 ;; TODO: Get rid of this in favor magit-gh-comment--to-github-format
-(defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text)
+(defun magit-gh--comment-as-json (filename commit-sha gh-pos comment-text in-reply-to)
   (json-encode `((:body . ,comment-text)
                  (:commit_id . ,commit-sha)
                  (:path . ,filename)
-                 (:position . ,gh-pos))))
+                 (:position . ,gh-pos)
+                 (:in_reply_to . ,in-reply-to))))
 
-(defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text)
+(defun magit-gh--post-pr-comment (pr filename commit-id gh-pos comment-text &optional in-reply-to)
   (let ((url (magit-gh--url-for-pr-comments pr))
         (json-payload (magit-gh--comment-as-json filename
                                                  commit-id
                                                  gh-pos
-                                                 comment-text)))
+                                                 comment-text
+                                                 in-reply-to)))
     (request url
      :type "POST"
      :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token)))
@@ -268,7 +271,6 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
 
 (defun magit-gh--list-reviews (pr)
   "Return a list of reviews on the given PR."
-  (setq magit-gh--request-cache nil)
   (let* ((reviews (magit-gh--request-sync
                    (magit-gh--url-for-pr-reviews pr)
                    :headers `(("Authorization" . ,(format "token %s" (magit-gh--get-oauth-token))))
@@ -294,8 +296,12 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                                                     :gh-pos (alist-get :position comment)
                                                     :text (alist-get :body comment)
                                                     :author (cdr (magit-gh--assoc-recursive '(:user :login) comment))
+                                                    :created-at (alist-get :created_at comment)
                                                     :original-gh-pos (alist-get :original_position comment)
-                                                    :is-outdated (not (alist-get :position comment))))
+                                                    :is-outdated (and
+                                                                  (not (alist-get :position comment))
+                                                                  (not (alist-get :in_reply_to comment)))
+                                                    :in-reply-to (alist-get :in_reply_to comment)))
                            comments)))
     ;; FIXME: This is broken - comments do not have to be associated with a review
     (dolist (comment comments)

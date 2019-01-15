@@ -54,6 +54,7 @@
 ;; - COMMIT-SHA is the SHA of the git commit to which the comment applies
 ;; - TEXT is the body of the comment
 ;; - AUTHOR is the Github handle of the commenter
+;; - CREATED_AT is the ISO-8601 timestamp at which the comment was created
 ;; - GH-POS is the Github position of the comment (an integer)
 ;; - ORIGINAL-GH-POS is only set if this comment is outdated
 ;; - IS-OUTDATED is t iff the comment does not apply to the most recent commit
@@ -65,6 +66,7 @@
   commit-sha
   text
   author
+  created-at
   gh-pos
   original-gh-pos
   is-outdated
@@ -458,11 +460,13 @@ GH-DIFF-BODY, return the corresponding magit-gh-diff-pos."
 If SECTION is not supplied, use the value of
 `magit-current-section'."
   (let ((section (or section (magit-current-section))))
-    (buffer-substring (if include-heading
-                          (oref section start)
-                        (or (oref section content)
-                            (oref section start)))
-                      (oref section end))))
+    (save-excursion
+      (with-current-buffer (marker-buffer (oref section end))
+        (buffer-substring (if include-heading
+                              (oref section start)
+                            (or (oref section content)
+                                (oref section start)))
+                          (oref section end))))))
 
 ;;;###autoload
 (defun magit-gh-reply-to-comment (id comment-text)
@@ -470,7 +474,7 @@ If SECTION is not supplied, use the value of
   (let* ((comment (make-magit-gh-comment :in-reply-to id
                                          :text comment-text))
          (current-pr (magit-gh--get-current-pr))
-         (commit-sha (cdr (magit-split-range (magit-diff--dwim))))
+         (commit-sha (magit-gh-comment-commit-sha (oref (magit-current-section) value)))
          (pending-review (or (magit-gh--get-review-draft current-pr)
                              (make-magit-gh-review :commit-sha commit-sha
                                                    :state 'pending))))
@@ -608,35 +612,185 @@ magit-gh-pulls)"
         (set-text-properties 0 (length section-content) nil section-content)
         section-content))))
 
+(defun magit-gh--ht-map-vals (table fn)
+  "Update TABLE by mapping FN over its values.
+
+This function does not modify its input."
+  (let ((result (ht-copy table)))
+    (ht-each (lambda (k v)
+               (ht-set! result
+                        k
+                        (funcall fn v)))
+             table)
+    result))
+
+(defun magit-gh--group-comments-by-thread (reviews)
+  (let ((comment-id->review (ht-create))
+        (comment-id->thread (ht-create)))
+    (dolist (review reviews comment-id->review)
+      ;; TODO: Known bug here - this discards pending comments (with
+      ;; id=nil) to avoid infinite recursion in the sort function
+      (dolist (comment (-remove (lambda (comment) (not (magit-gh-comment-id comment)))
+                                (magit-gh-review-comments review)))
+        (ht-set! comment-id->review
+                 (magit-gh-comment-id comment)
+                 review)
+        (ht-set! comment-id->thread
+                 (magit-gh-comment-id comment)
+                 (cons comment nil))))
+    (ht-each
+     (lambda (id thread)
+       (-if-let* ((comment (car thread))
+                  (upstream-cons (ht-get comment-id->thread
+                                         (magit-gh-comment-in-reply-to comment))))
+           (setcdr (last upstream-cons) thread)))
+     comment-id->thread)
+    (--> comment-id->thread
+         ;; Discard entries that represent partial threads
+         (ht-select (lambda (id thread)
+                      (not (magit-gh-comment-in-reply-to (car thread))))
+                    it)
+         ;; Sort based on timestamp
+         (magit-gh--ht-map-vals
+          it
+          (lambda (thread)
+            (let ((comment< (lambda (x y)
+                              (if (equal (magit-gh-comment-in-reply-to x)
+                                         (magit-gh-comment-in-reply-to y))
+                                  (string< (magit-gh-comment-created-at x)
+                                           (magit-gh-comment-created-at y))
+                                ;; surprisingly, Y < X in the input
+                                ;; list, so return nil for a stable
+                                ;; sort
+                                nil))))
+              (magit-gh--sort thread
+                              #'identity
+                              comment<))))
+         (let ((review->threads (ht-create)))
+           (ht-each (lambda (comment-id thread)
+                      (let ((review (ht-get comment-id->review
+                                            comment-id)))
+                        (ht-set! review->threads
+                                 review
+                                 (cons thread (ht-get review->threads
+                                                      review)))))
+                    it)
+           ;; Add any remaining reviews (with no comments)
+           (dolist (review reviews review->threads)
+             (when (not (ht-contains? review->threads review))
+               (ht-set! review->threads
+                        review
+                        nil)))))))
+
+(ert-deftest magit-gh--test-grouping-comments-into-threads ()
+  (let* ((comment1 (make-magit-gh-comment :id 1))
+         (comment2 (make-magit-gh-comment :id 2))
+         (comment3 (make-magit-gh-comment :id 3
+                                          :in-reply-to 1
+                                          :created-at "2018-01-02T00:00:00Z"))
+         (comment4 (make-magit-gh-comment :id 4))
+         (comment5 (make-magit-gh-comment :id 5
+                                          :in-reply-to 1
+                                          :created-at "2018-01-01T00:00:00Z"))
+         (comment6 (make-magit-gh-comment :id 6
+                                          :in-reply-to 3))
+         (review1 (make-magit-gh-review :id 1
+                                        :comments (list comment1 comment2)))
+         (review2 (make-magit-gh-review :id 2
+                                        :comments (list comment3 comment4)))
+         (review3 (make-magit-gh-review :id 3
+                                        :comments (list comment5 comment6)))
+         (review4 (make-magit-gh-review :state 'pending))
+         (result (magit-gh--group-comments-by-thread (list review1 review2 review3 review4))))
+    (ht-get result review1)
+    (should (equal (ht-get result review1)
+                   (list (list comment2)
+                         (list comment1
+                               comment5
+                               comment3
+                               comment6))))
+    (should (equal (ht-get result review2)
+                   (list (list comment4))))
+    (should (ht-contains? result review4))
+    (should (not (ht-get result review4)))))
+
+(defun magit-gh--sorted-ht-each (fn sort-key-fn table &optional sort-pred-fn)
+  "Like `ht-each', but sort the entries before iterating over them.
+
+Maps SORT-KEY-FN over the keys and orders the resulting list
+according to SORT-PRED-FN. Then call FN for each key and value in
+the sorted list of entries. FN should accept 2 arguments, a key
+and value."
+  (let ((sorted-keys (magit-gh--sort (ht-keys table)
+                                     sort-key-fn
+                                     sort-pred-fn)))
+    (dolist (k sorted-keys)
+      (funcall fn k (ht-get table k)))))
+
+(ert-deftest test-magit-gh--sorted-ht-each ()
+  (let ((tbl (ht-from-alist `(("a" . 1)
+                              ("z" . 2)
+                              ("c" . 3))))
+        accum)
+    (magit-gh--sorted-ht-each (lambda (k _) (push k accum)) #'identity tbl #'string<)
+    (should (equal accum '("z" "c" "a"))))
+  (let ((tbl (ht-from-alist `((1 . "a")
+                              (2 . "z")
+                              (3 . "c"))))
+        accum)
+    (magit-gh--sorted-ht-each (lambda (k _) (push k accum)) #'identity tbl)
+    (should (equal accum '(3 2 1)))))
+
 (defun magit-gh--insert-reviews (pr reviews diff-body)
-  (dolist (review reviews)
-    (magit-insert-section (review review)
-      (magit-insert-heading (format "Review by %s"
-                                    (magit-gh-review-author review)))
-      (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
-                             nil
-                           (magit-gh-review-body review))
-                         (and (equal (magit-gh-review-state review) 'pending)
-                              magit-gh--review-body-placeholder-text))))
-          (magit-insert-section (review-body)
-            (insert (magit-gh--text-with-keymap body
-                                                `(,(kbd "C-c '") . ,'magit-gh--edit-prose)))
-            (insert "\n")))
-      (dolist (comment (magit-gh-review-comments review))
-        (magit-insert-section (comment comment (magit-gh-comment-is-outdated comment))
-          (magit-insert-heading (format "%sComment at %s"
-                                        (if (magit-gh-comment-is-outdated comment)
-                                            "[Outdated] "
-                                          "")
-                                        "<timestamp>"))
-          (insert (magit-gh--propertize-comment-ctx diff-body
-                                                    (magit-gh-pr-diff-range pr)
-                                                    comment))
-          (insert "\n")
-          (insert (magit-gh--propertize-comment-text (magit-gh-comment-text comment)))
-          (insert "\n")
-          (insert (format "- %s" (magit-gh-comment-author comment)))
-          (insert "\n"))))))
+  (let ((review->comment-threads (magit-gh--group-comments-by-thread reviews)))
+    (magit-gh--sorted-ht-each
+     (lambda (review comment-threads)
+       (magit-insert-section (review review)
+         (magit-insert-heading (format "Review by %s"
+                                       (magit-gh-review-author review)))
+         (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
+                                nil
+                              (magit-gh-review-body review))
+                            (and (equal (magit-gh-review-state review) 'pending)
+                                 magit-gh--review-body-placeholder-text))))
+             (magit-insert-section (review-body)
+               (insert (magit-gh--text-with-keymap body
+                                                   `(,(kbd "C-c '") . ,'magit-gh--edit-prose)))
+               (insert "\n")))
+         (dolist (thread comment-threads)
+           (letfn ((make-heading (lambda (comment)
+                                   (format "%sComment at %s"
+                                           (if (magit-gh-comment-is-outdated comment)
+                                               "[Outdated] "
+                                             "")
+                                           "<timestamp>"))))
+             (if (> (length thread) 1)
+                 (magit-insert-section (thread thread)
+                   (magit-insert-heading (make-heading (car thread)))
+                   (dolist (comment thread)
+                     (magit-gh--insert-comment comment pr diff-body)))
+               (dolist (comment thread)
+                 (magit-gh--insert-comment comment
+                                           pr
+                                           diff-body
+                                           (make-heading comment))))))))
+     #'magit-gh-review-id ;; TODO: should this be created-at instead?
+     review->comment-threads)))
+
+
+(defun magit-gh--insert-comment (comment pr diff-body &optional heading)
+  (magit-insert-section (comment comment (magit-gh-comment-is-outdated comment))
+    (when heading
+      (magit-insert-heading heading))
+    (when (not (magit-gh-comment-in-reply-to comment))
+      (insert (magit-gh--propertize-comment-ctx diff-body
+                                                (magit-gh-pr-diff-range pr)
+                                                comment))
+      (insert "\n"))
+    (insert (magit-gh--propertize-comment-text (magit-gh-comment-text comment)))
+    (insert "\n")
+    (insert (format "- %s" (magit-gh-comment-author comment)))
+    (insert "\n")))
 
 (defun magit-gh--propertize-comment-text (text)
   "Setup keybindings that allow quick reply-to"
@@ -705,21 +859,21 @@ magit-gh-pulls)"
                                           (not (looking-at-p magit-gh--hunk-header-re)))
                                 (forward-line (/ n (abs n)))
                                 (setq n (- n (/ n (abs n))))))))
-         (save-excursion
-           (magit-gh--with-temp-buffer
-             (insert diff-body)
-             (goto-char (point-min))
-             (magit-gh--paint-diff)
-             (goto-char (point-min))
-             (magit-gh--jump-to-file-in-diff file)
-             (re-search-forward magit-gh--hunk-header-re)
-             (forward-line gh-pos)
-             (let* ((num-lines-ctx-before 3)
-                    (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
-                                         (point)))
-                    (end (save-excursion (end-of-line)
-                                         (point))))
-               (format "%s\n%s" file (buffer-substring beg end)))))))
+    (save-excursion
+      (magit-gh--with-temp-buffer
+        (insert diff-body)
+        (goto-char (point-min))
+        (magit-gh--paint-diff)
+        (goto-char (point-min))
+        (magit-gh--jump-to-file-in-diff file)
+        (re-search-forward magit-gh--hunk-header-re)
+        (forward-line gh-pos)
+        (let* ((num-lines-ctx-before 3)
+               (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
+                                    (point)))
+               (end (save-excursion (end-of-line)
+                                    (point))))
+          (format "%s\n%s" file (buffer-substring beg end)))))))
 
 ;; Review drafts
 
