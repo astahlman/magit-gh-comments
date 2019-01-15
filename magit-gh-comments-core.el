@@ -745,35 +745,37 @@ and value."
   (let ((review->comment-threads (magit-gh--group-comments-by-thread reviews)))
     (magit-gh--sorted-ht-each
      (lambda (review comment-threads)
-       (magit-insert-section (review review)
-         (magit-insert-heading (format "Review by %s"
-                                       (magit-gh-review-author review)))
-         (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
-                                nil
-                              (magit-gh-review-body review))
-                            (and (equal (magit-gh-review-state review) 'pending)
-                                 magit-gh--review-body-placeholder-text))))
-             (magit-insert-section (review-body)
-               (insert (magit-gh--text-with-keymap body
-                                                   `(,(kbd "C-c '") . ,'magit-gh--edit-prose)))
-               (insert "\n")))
-         (dolist (thread comment-threads)
-           (letfn ((make-heading (lambda (comment)
-                                   (format "%sComment at %s"
-                                           (if (magit-gh-comment-is-outdated comment)
-                                               "[Outdated] "
-                                             "")
-                                           "<timestamp>"))))
-             (if (> (length thread) 1)
-                 (magit-insert-section (thread thread)
-                   (magit-insert-heading (make-heading (car thread)))
-                   (dolist (comment thread)
-                     (magit-gh--insert-comment comment pr diff-body)))
-               (dolist (comment thread)
-                 (magit-gh--insert-comment comment
-                                           pr
-                                           diff-body
-                                           (make-heading comment))))))))
+       (unless (and (string-empty-p (magit-gh-review-body review))
+                    (not comment-threads))
+         (magit-insert-section (review review)
+           (magit-insert-heading (format "Review by %s"
+                                         (magit-gh-review-author review)))
+           (if-let ((body (or (if (string-empty-p (magit-gh-review-body review))
+                                  nil
+                                (magit-gh-review-body review))
+                              (and (equal (magit-gh-review-state review) 'pending)
+                                   magit-gh--review-body-placeholder-text))))
+               (magit-insert-section (review-body)
+                 (insert (magit-gh--text-with-keymap body
+                                                     `(,(kbd "C-c '") . ,'magit-gh--edit-prose)))
+                 (insert "\n")))
+           (dolist (thread comment-threads)
+             (letfn ((make-heading (lambda (comment)
+                                     (format "%sComment at %s"
+                                             (if (magit-gh-comment-is-outdated comment)
+                                                 "[Outdated] "
+                                               "")
+                                             "<timestamp>"))))
+               (if (> (length thread) 1)
+                   (magit-insert-section (thread thread)
+                     (magit-insert-heading (make-heading (car thread)))
+                     (dolist (comment thread)
+                       (magit-gh--insert-comment comment pr diff-body)))
+                 (dolist (comment thread)
+                   (magit-gh--insert-comment comment
+                                             pr
+                                             diff-body
+                                             (make-heading comment)))))))))
      #'magit-gh-review-id ;; TODO: should this be created-at instead?
      review->comment-threads)))
 

@@ -300,13 +300,24 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                                                     :original-gh-pos (alist-get :original_position comment)
                                                     :is-outdated (and
                                                                   (not (alist-get :position comment))
-                                                                  (not (alist-get :in_reply_to comment)))
-                                                    :in-reply-to (alist-get :in_reply_to comment)))
+                                                                  (not (alist-get :in_reply_to_id comment)))
+                                                    :in-reply-to (alist-get :in_reply_to_id comment)))
                            comments)))
-    ;; FIXME: This is broken - comments do not have to be associated with a review
     (dolist (comment comments)
       (let* ((review-id (magit-gh-comment-review-id comment))
-             (review (ht-get review-id->review review-id)))
+             (review (or (ht-get review-id->review review-id)
+                         ;; Hack: Comments do not have to be
+                         ;; associated with a review, so we create one
+                         ;; on the fly.
+
+                         ;; TODO: Unit test this - remove the (or) to
+                         ;; expose the bug
+                         (let ((review (make-magit-gh-review :id review-id
+                                                             :author (magit-gh-comment-author comment))))
+                           (ht-set! review-id->review
+                                    review-id
+                                    review)
+                           review))))
         (push comment (magit-gh-review-comments review))))
     (magit-gh--sort (ht-values review-id->review) #'magit-gh-review-id)))
 
