@@ -442,16 +442,10 @@ With a carriage-return \\+ line-feed.\n+"))
     (with-mocks ((magit-gh--request-sync-internal #'mock-github-api)
                  (magit-gh--get-current-pr (lambda () magit-gh--test-pr))
                  (magit-gh--post-review (lambda (&rest args) (push args mock-calls))))
-
-      (message "aaa")
       (magit-gh--simulate-adding-comments magit-gh--test-comments)
-      (message "bbb")
       (magit-gh-start-review)
-      (message "ccc")
       (magit-gh--simulate-adding-review-body "Super-great job")
-      (message "ddd")
       (magit-gh-submit-review)
-      (message "eee")
       (should (equal (list magit-gh--test-pr
                            (make-magit-gh-review :body "Super-great job"
                                                  :comments (reverse magit-gh--test-comments)
