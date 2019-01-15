@@ -144,4 +144,65 @@ buzz"
   (let ((response-fn (key-binding key t)))
     (apply response-fn args)))
 
+(defun magit-gh--parallel-walk (t1 t2 fn &optional get-children-fn1 get-children-fn2)
+  "Walk trees T1 and T2 in parallel, applying FN to each node.
+
+Raises an error if the structure of T1 and T2 differs.
+
+FN, a function of two arguments, is applied to every pair of
+corresponding nodes in T1 and T2. Given a node in the tree,
+GET-CHILDREN-FN1 should return a list of T1's children, and
+GET-CHLDREN-FN2 should do the same for T2"
+  (let ((get-children-fn1 (or get-children-fn1
+                              (lambda (node)
+                                (oref node children))))
+        (get-children-fn2 (or get-children-fn2
+                              (lambda (node)
+                                (oref node children)))))
+    (cond
+     ((and (not t1) (not t2)) nil)
+     ;; TODO: Add t1 and t2 to return value for diagnostics
+     ((or (not t1) (not t2)) (signal 'non-matching-trees (cons t1 t2)))
+     (t (progn
+          (funcall fn t1 t2)
+          (let ((p1 (funcall get-children-fn1 t1))
+                (p2 (funcall get-children-fn2 t2)))
+            (while p1
+              (magit-gh--parallel-walk (pop p1) (pop p2) fn get-children-fn1 get-children-fn2))
+            ;; i.e., p2 should be same length as p1
+            (when p2
+              (signal 'non-matching-trees (cons nil p2)))))))))
+
+(defun magit-gh--add-it-bindings (spec)
+  (when spec
+    (-let* (((type checker-form children) spec)
+            (checker-form (and checker-form
+                               `(lambda (section)
+                                  (let ((it section))
+                                    ,checker-form)))))
+      `(,type ,checker-form
+              ,(mapcar #'magit-gh--add-it-bindings children)))))
+
+(defmacro magit-gh--check-tree (spec)
+  `(magit-gh--parallel-walk
+    magit-root-section
+    (quote ,(magit-gh--add-it-bindings spec))
+    (lambda (node -spec)
+      (-let [(type checker-fn children) -spec]
+        (should (eq type (oref node type)))
+        (when checker-fn
+          (funcall checker-fn node))))
+    (lambda (node)
+      (oref node children))
+    (lambda (-spec)
+      (-let [(type checker-fn children) -spec]
+        children))))
+
+(defun magit-gh--assert-section-content-matches (it expected-content-re)
+  (let ((section-content (substring-no-properties
+                          (magit-gh--section-content-as-string it t))))
+    (should (string-match-p
+             expected-content-re
+             section-content))))
+
 ;;; test-helper.el ends here

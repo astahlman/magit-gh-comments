@@ -40,4 +40,11 @@ a function"
       (define-key keys (car binding) (cdr binding)))
     (propertize s 'keymap keys)))
 
+(defun magit-gh--map-tree (fn root)
+  (when root
+    (cons (funcall fn root)
+          (mapcar (lambda (child) (map-tree fn child)) (oref root children)))))
+;; e.g.,
+;; (magit-gh--map-tree (lambda (root) (oref root type)) fake-magit-root-section)
+
 (provide 'magit-gh-comments-utils)

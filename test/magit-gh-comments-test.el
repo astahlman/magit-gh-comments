@@ -282,16 +282,8 @@ index 9fda99d..f88549a 100644
                      (magit-gh--comment-ctx diff-body 5 "f"))))
     (should-error (magit-gh--comment-ctx diff-body 4 "f"))))
 
-(defun magit-gh--section-search-forward (pred)
-  (while (progn (condition-case nil
-                    (magit-section-forward)
-                  (user-error (error "End-of-buffer reached; no matching magit-section")))
-                (not (funcall pred (magit-current-section))))))
 
-(defun magit-gh--section-type-matcher (target-type)
-  (lambda (section)
-    (equal (oref section type) target-type)))
-
+(defalias 'check-content #'magit-gh--assert-section-content-matches)
 
 (ert-deftest magit-gh--test-populate-reviews-buffer ()
   (setq magit-gh--request-cache nil)
@@ -317,84 +309,65 @@ index 9fda99d..f88549a 100644
       (magit-gh-show-pr magit-gh--test-pr)
       (should (string= expected-buf-name (buffer-name)))
       (goto-char (point-min))
-      ;; PR Title and description
-      (should (magit-gh--looking-at-p (regexp-quote "PR Title (#0) [OPEN]")))
-      (forward-line 2)
-      (should (magit-gh--looking-at-p (regexp-quote "Fake PR description here
-With a carriage-return + line-feed.")))
-      ;; Diffstat
-      (magit-section-forward)
-      (should (magit-gh--looking-at-p "Files changed"))
-      (magit-section-forward)
-      (should (magit-gh--looking-at-p (s-dedent "\
-                                        [0-9]+ files changed, [0-9]+ insertions(\\+), [0-9]+ deletions(-)
-                                        \\([a-zA-Z-/]+ +| +[0-9] [+-]+
-                                        ?\\)+")))
-      (dotimes (_i 2)
-        (magit-gh--section-search-forward
-         (magit-gh--section-type-matcher 'file)))
-      ;; Review sections
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'review))
-      (should (magit-gh--looking-at-p "Review by astahlman"))
-      (should (s-contains? "This is a top-level review"
-                           (magit-gh--section-content-as-string)))
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'comment))
-      (should (magit-gh--looking-at-p "Comment at .+
-f
-@@ -1,3 \\+1,2 @@
- 1\\. :a/1/1, :b/1/1
--2\\. :a/1/2
-A comment about the removal of line 2
-- astahlman"))
-      (forward-line 4)
-      (should (magit-gh--looking-at-p "-2. :a/1/2"))
-      (save-excursion
-        (execute-kbd-macro (kbd "<return>"))
-        (should (equal (car visit-diff-pos-calls)
-                       `("f" ,(make-magit-gh-diff-pos :a-or-b :a
-                                                      :hunk-start 1
-                                                      :offset 2))))
-        (should (equal (caar magit-diff-calls)
-                       (magit-gh-pr-diff-range magit-gh--test-pr))))
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'comment))
-      (should (magit-gh--looking-at-p "A response to a comment about the removal of line 2
-- spiderman"))
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'review))
-      (should (magit-gh--looking-at-p "Review by spiderman"))
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'comment))
-      (should (oref (magit-current-section) hidden))
-      (magit-section-toggle (magit-current-section))
-      (should (magit-gh--looking-at-p "\\[Outdated\\] Comment at .+
-f
-\\+13\\. :b/10/3
- 14\\. :a/11/3, :b/10/4
-\\+15\\. :b/10/5
-\\+16\\. :b/10/6 (this line will be deleted in the next commit)
-Some other comment that's been resolved
-- spiderman"))
-      (magit-gh--section-search-forward
-       (magit-gh--section-type-matcher 'comment))
-      (should (magit-gh--looking-at-p "Comment at .+
-f
- 12\\. :a/11/2, :b/10/2
-\\+13\\. :b/10/3
- 14\\. :a/11/3, :b/10/4
-\\+15\\. :b/10/5
-A comment about the addition of line 15
-- spiderman"))
-      (forward-line 5)
-      (should (magit-gh--looking-at-p "\\+15\\. :b/10/5"))
-      (save-excursion
-        (execute-kbd-macro (kbd "<return>"))
-        (should (equal (car visit-diff-pos-calls)
-                       `("f" ,(make-magit-gh-diff-pos :a-or-b :b
-                                                      :hunk-start 10
-                                                      :offset 5))))))))
+      (with-current-buffer (get-buffer "PR: magit-gh-comments (#0)")
+        (magit-gh--check-tree
+         (pull-request
+          nil
+          ((summary
+            (check-content it "PR Title (#0) \\[OPEN\\]
+
+Fake PR description here
+With a carriage-return \\+ line-feed.\n+"))
+           (diffstat
+            (check-content it "Files changed.\n*")
+            ((diffstat
+              (check-content it (s-dedent "\
+                           [0-9]+ files changed, [0-9]+ insertions(\\+), [0-9]+ deletions(-)
+                           \\([a-zA-Z-/]+ +| +[0-9] [+-]+
+                           ?\\)+"))
+              ((file (check-content it "a +\| +[0-9]+ [\\+-]+"))
+               (file (check-content it "another-file +\| +[0-9]+ [\\+-]+"))))))
+           (review
+            (check-content it "Review by astahlman")
+            ((review-body
+              (check-content it "This is a top-level review.*"))
+             (thread
+              (check-content it "Comment at .*")
+              ((comment
+                (check-content it (s-dedent "\
+                             A comment about the removal of line 2
+                             - astahlman")))
+               (comment
+                (let ((section-content (substring-no-properties
+                                        (magit-gh--section-content-as-string it t))))
+                  (should (string-match-p
+                           (s-dedent "\
+                             A response to a comment about the removal of line 2
+                             - spiderman")
+                           section-content))))))))
+           (review
+            (check-content it "Review by spiderman")
+            ((comment
+              (check-content it (s-dedent "\
+                             Comment at .*
+                             f
+                             .*
+                             .*
+                             .*
+                             .*
+                             A comment about the addition of line 15
+                             - spiderman")))
+             (comment
+              (progn (should (oref it hidden))
+                     (check-content it (s-dedent "\
+                             \\[Outdated\\] Comment at .*
+                             f
+                             .*
+                             .*
+                             .*
+                             .*
+                             Some other comment that's been resolved
+                             - spiderman")))))))))))))
 
 (ert-deftest test-magit-gh--skip-cache-on-reload-pull-request ()
   (setq magit-gh--request-cache nil)
