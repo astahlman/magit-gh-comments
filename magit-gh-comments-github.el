@@ -19,14 +19,14 @@
 ;; ID is the unique Github identifier for this review
 ;; AUTHOR is the Github handle of the user who submitted the review
 ;; BODY is the top-level review text
-;; COMMENTS is a list of `magit-gh-comment's
+;; THREADS is a list of lists of `magit-gh-comment's; each list is a comment thread
 ;; COMMIT-SHA is the SHA of the git commit to which the review applies
 ;; STATE is one of "APPROVE", "REQUEST_CHANGES", or "COMMENT". nil means "PENDING"
 (defstruct magit-gh-review
   id
   author
   body
-  comments
+  threads
   commit-sha
   state)
 
@@ -197,19 +197,10 @@ function returns."
                (if (not (member (request-response-status-code response) '(200 201)))
                    (error "Failed to post comment to %s" url)))))))
 
-(defun magit-gh--list-comments (pr)
-  "Return a list of comments on the given PR.
-
-The returned list does not include outdated comments. A comment
-is outdated if its position is null, according to Github. Each
-element of the result is a `magit-gh-comment'"
-  (apply 'append
-         (mapcar (lambda (review) (magit-gh-review-comments review))
-                 (magit-gh--list-reviews pr))))
-
+(defun magit-gh--reply-to-comment (pr in-reply-to comment-text)
+  (magit-gh--post-pr-comment pr nil nil nil comment-text in-reply-to))
 
 ;; TODO: Make an integration test out of this:
-;; (magit-gh--list-comments magit-gh-comment-test-pr)
 ;; (magit-gh--list-reviews magit-gh-comment-test-pr)
 
 (defun magit-gh--assoc-recursive (keys alist)
@@ -269,6 +260,93 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
               pair))
           alist))
 
+
+(defun magit-gh--ht-map-vals (table fn)
+  "Update TABLE by mapping FN over its values.
+
+This function does not modify its input."
+  (let ((result (ht-copy table)))
+    (ht-each (lambda (k v)
+               (ht-set! result
+                        k
+                        (funcall fn v)))
+             table)
+    result))
+
+(defun magit-gh--group-comments-by-thread (comments) ;(reviews)
+  (let (;(comment->review (ht-create))
+        (comment-id->thread (ht-create))
+        (num-pending-comments 0))
+    (dolist (comment comments)
+      (ht-set! comment-id->thread
+               (or (magit-gh-comment-id comment)
+                   ;; pending comments can't possibly have a reply,
+                   ;; so just assign them some placeholder ID
+                   (make-symbol (format ":pending-%s" (incf num-pending-comments))))
+               (cons comment nil)))
+    (ht-each
+     (lambda (id thread)
+       (-if-let* ((comment (car thread))
+                  (upstream-cons (ht-get comment-id->thread
+                                         (magit-gh-comment-in-reply-to comment))))
+           (setcdr (last upstream-cons) thread)))
+     comment-id->thread)
+    (--> comment-id->thread
+         ;; Discard entries that represent partial threads
+         (ht-select (lambda (id thread)
+                      (not (magit-gh-comment-in-reply-to (car thread))))
+                    it)
+         ;; Sort based on timestamp
+         (magit-gh--ht-map-vals
+          it
+          (lambda (thread)
+            (let ((comment< (lambda (x y)
+                              (if (equal (magit-gh-comment-in-reply-to x)
+                                         (magit-gh-comment-in-reply-to y))
+                                  (string< (magit-gh-comment-created-at x)
+                                           (magit-gh-comment-created-at y))
+                                ;; surprisingly, Y < X in the input
+                                ;; list, so return nil for a stable
+                                ;; sort
+                                nil))))
+              (magit-gh--sort thread
+                              #'identity
+                              comment<))))
+         (ht-values it))))
+
+;; (ert-deftest magit-gh--test-grouping-pending-comments ()
+;;   (let ((review (make-magit-gh-review :state 'pending
+;;                                       :comments (list
+;;                                                  (make-magit-gh-comment)))))
+;;     (magit-gh--group-comments-by-thread (list review))))
+
+(ert-deftest magit-gh--test-grouping-pending-comments ()
+  (let ((pending-comment (make-magit-gh-comment)))
+    (should (equal (list (list pending-comment))
+                   (magit-gh--group-comments-by-thread (list pending-comment))))))
+
+(ert-deftest magit-gh--test-grouping-comments-into-threads ()
+  (let* ((comment1 (make-magit-gh-comment :id 1))
+         (comment2 (make-magit-gh-comment :id 2))
+         (comment3 (make-magit-gh-comment :id 3
+                                          :in-reply-to 1
+                                          :created-at "2018-01-02T00:00:00Z"))
+         (comment4 (make-magit-gh-comment :id 4))
+         (comment5 (make-magit-gh-comment :id 5
+                                          :in-reply-to 1
+                                          :created-at "2018-01-01T00:00:00Z"))
+         (comment6 (make-magit-gh-comment :id 6
+                                          :in-reply-to 3))
+         (result (magit-gh--group-comments-by-thread
+                  (list comment1 comment2 comment3 comment4 comment5 comment6))))
+    (should (equal result
+                   (list (list comment4)
+                         (list comment2)
+                         (list comment1
+                               comment5
+                               comment3
+                               comment6))))))
+
 (defun magit-gh--list-reviews (pr)
   "Return a list of reviews on the given PR."
   (let* ((reviews (magit-gh--request-sync
@@ -303,22 +381,24 @@ to colon-prefixed keywords. L can be an alist or a list of alists."
                                                                   (not (alist-get :in_reply_to_id comment)))
                                                     :in-reply-to (alist-get :in_reply_to_id comment)))
                            comments)))
-    (dolist (comment comments)
-      (let* ((review-id (magit-gh-comment-review-id comment))
-             (review (or (ht-get review-id->review review-id)
-                         ;; Hack: Comments do not have to be
-                         ;; associated with a review, so we create one
-                         ;; on the fly.
+    (let ((threads (magit-gh--group-comments-by-thread comments)))
+      ;; TODO: Probably need to sort here
+      (dolist (thread threads)
+        (let* ((review-id (magit-gh-comment-review-id (car thread)))
+               (review (or (ht-get review-id->review review-id)
+                           ;; Hack: Comments do not have to be
+                           ;; associated with a review, so we create one
+                           ;; on the fly.
 
-                         ;; TODO: Unit test this - remove the (or) to
-                         ;; expose the bug
-                         (let ((review (make-magit-gh-review :id review-id
-                                                             :author (magit-gh-comment-author comment))))
-                           (ht-set! review-id->review
-                                    review-id
-                                    review)
-                           review))))
-        (push comment (magit-gh-review-comments review))))
+                           ;; TODO: Unit test this - remove the (or) to
+                           ;; expose the bug
+                           (let ((review (make-magit-gh-review :id review-id
+                                                               :author (magit-gh-comment-author comment))))
+                             (ht-set! review-id->review
+                                      review-id
+                                      review)
+                             review))))
+          (push thread (magit-gh-review-threads review)))))
     (magit-gh--sort (ht-values review-id->review) #'magit-gh-review-id)))
 
 (defun magit-gh-comment--to-github-format (comment &optional is-standalone)
@@ -340,7 +420,7 @@ API reference: https://developer.github.com/v3/pulls/reviews/#example"
         (payload `((:commit_id . ,(magit-gh-review-commit-sha review))
                    (:body . ,(magit-gh-review-body review)))))
     (when-let ((comments (mapcar #'magit-gh-comment--to-github-format
-                                 (magit-gh-review-comments review))))
+                                 (mapcar #'car (magit-gh-review-threads review)))))
       (push `(:comments . ,comments) payload))
     (when-let ((event (and (not (equal 'pending (magit-gh-review-state review)))
                            (magit-gh-review-state review))))

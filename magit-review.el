@@ -53,7 +53,7 @@ See also `magit-buffer-lock-functions'."
                      (make-magit-gh-review :state state
                                            :commit-sha (cdr (magit-split-range
                                                              (magit-gh-pr-diff-range pr))))))
-         (comments (and review (magit-gh-review-comments review)))
+         (comments (and review (mapcar #'car (magit-gh-review-threads review))))
          (review-body-section (car (magit-gh--filter-sections
                                     (lambda (section)
                                       (equal (oref section type)

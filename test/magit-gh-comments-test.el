@@ -179,37 +179,32 @@ With a carriage-return + line-feed.")
   (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
     (let* ((response (magit-gh--list-reviews magit-gh--test-pr))
            (first-review (car response))
-           (first-comment (car (magit-gh-review-comments first-review))))
-      (should (string-match-p "A comment about the removal of line 2"
-                              (magit-gh-comment-text first-comment)))
+           (second-review (cadr response)))
       (should (string-match-p "This is a top-level review"
-                              (magit-gh-review-body first-review))))))
-
-(defun magit-gh--discard-empty-keys (l)
-  (let (result)
-    (dolist (pair l result)
-      (when (cdr pair)
-        (setq result (cons pair result))))))
-
-(ert-deftest test-magit-gh--github-fetch-comments ()
-  ;; TODO: Test against the comment context given this diff body
-  (let ((retrieved-comments (with-mocks ((magit-gh--request-sync-internal #'mock-github-api))
-                              (magit-gh--list-comments magit-gh--test-pr)))
-        (expected-comments (list (make-magit-gh-comment :id 1
+                              (magit-gh-review-body first-review)))
+      (should (equal (magit-gh-review-threads first-review)
+                     (list (list (make-magit-gh-comment :id 1
                                                         :review-id 42
                                                         :author "astahlman"
                                                         :text "A comment about the removal of line 2"
                                                         :file "f"
                                                         :gh-pos 2
                                                         :created-at "2019-01-01T00:00:00Z")
-                                 (make-magit-gh-comment :id 2
+                                 (make-magit-gh-comment :id 4
+                                                        :review-id 43
+                                                        :author "spiderman"
+                                                        :text "A response to a comment about the removal of line 2"
+                                                        :in-reply-to 1
+                                                        :created-at "2019-01-01T00:00:00Z")))))
+      (should (equal (magit-gh-review-threads second-review)
+                     (list (list (make-magit-gh-comment :id 2
                                                         :review-id 43
                                                         :author "spiderman"
                                                         :text "A comment about the addition of line 15"
                                                         :file "f"
                                                         :gh-pos 9
-                                                        :created-at "2019-01-01T00:00:00Z")
-                                 (make-magit-gh-comment :id 3
+                                                        :created-at "2019-01-01T00:00:00Z"))
+                           (list (make-magit-gh-comment :id 3
                                                         :review-id 43
                                                         :author "spiderman"
                                                         :text "Some other comment that's been resolved"
@@ -217,15 +212,13 @@ With a carriage-return + line-feed.")
                                                         :is-outdated t
                                                         :original-gh-pos 10
                                                         :commit-sha "abcdef"
-                                                        :created-at "2019-01-01T00:00:00Z")
-                                 (make-magit-gh-comment :id 4
-                                                        :review-id 43
-                                                        :author "spiderman"
-                                                        :text "A response to a comment about the removal of line 2"
-                                                        :in-reply-to 1
-                                                        :created-at "2019-01-01T00:00:00Z"))))
-    (should (equal expected-comments
-                   (magit-gh--sort retrieved-comments #'magit-gh-comment-id)))))
+                                                        :created-at "2019-01-01T00:00:00Z"))))))))
+
+(defun magit-gh--discard-empty-keys (l)
+  (let (result)
+    (dolist (pair l result)
+      (when (cdr pair)
+        (setq result (cons pair result))))))
 
 (ert-deftest magit-gh--test-comment-ctx ()
   (let ((diff-body "diff --git a/f b/f
@@ -393,7 +386,7 @@ With a carriage-return \\+ line-feed.\n+"))
                                                :text "This comment isn't submitted yet"))
          (pending-review (make-magit-gh-review :body "I'm still working on this review"
                                                :commit-sha "ghijkl"
-                                               :comments (list saved-comment))))
+                                               :threads (list (list saved-comment)))))
     (magit-gh--store-review-draft pending-review magit-gh--test-pr)
     (should (equal pending-review
                    (magit-gh--get-review-draft magit-gh--test-pr)))))
@@ -432,7 +425,8 @@ With a carriage-return \\+ line-feed.\n+"))
 (ert-deftest magit-gh--test-add-pending-comments ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
   (magit-gh--simulate-adding-comments magit-gh--test-comments)
-  (should (equal (magit-gh-review-comments (magit-gh--get-review-draft magit-gh--test-pr))
+  (should (equal (mapcar #'car (magit-gh-review-threads
+                                (magit-gh--get-review-draft magit-gh--test-pr)))
                  (reverse magit-gh--test-comments))))
 
 
@@ -448,7 +442,7 @@ With a carriage-return \\+ line-feed.\n+"))
       (magit-gh-submit-review)
       (should (equal (list magit-gh--test-pr
                            (make-magit-gh-review :body "Super-great job"
-                                                 :comments (reverse magit-gh--test-comments)
+                                                 :threads (mapcar #'list (reverse magit-gh--test-comments))
                                                  :commit-sha "ghijkl"
                                                  :state 'comment))
                      (car mock-calls))))))
@@ -505,7 +499,9 @@ With a carriage-return \\+ line-feed.\n+"))
                                      (insert (s-dedent "\
                                                 a                |  5 +++--
                                                 another-file     |  7 +++++++
-                                                2 files changed, 10 insertions(+), 2 deletions(-)") ))))
+                                                2 files changed, 10 insertions(+), 2 deletions(-)") )))
+                 (magit-gh--post-pr-comment (lambda (&rest args)
+                                              (push args post-comment-calls))))
       (when-let ((buf (get-buffer expected-buf-name)))
         (kill-buffer buf))
       (magit-gh-show-pr magit-gh--test-pr)
@@ -513,10 +509,9 @@ With a carriage-return \\+ line-feed.\n+"))
         (re-search-forward "A comment about the removal of line 2")
         (beginning-of-line)
         (magit-gh--simulate-command (kbd "R") "A response"))
-      (let* ((review (magit-gh--get-review-draft magit-gh--test-pr))
-             (comment1 (car (magit-gh-review-comments review))))
-        (should (= (magit-gh-comment-in-reply-to comment1) 1))
-        (should (string= (magit-gh-comment-text comment1) "A response"))))))
+      (should (= 1 (length post-comment-calls)))
+      (let ((in-reply-to-id 1))
+        (should (member 1 (car post-comment-calls)))))))
 
 (ert-deftest magit-gh--test-submission-review-body-only ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
@@ -529,7 +524,7 @@ With a carriage-return \\+ line-feed.\n+"))
       (magit-gh-submit-review)
       (should (equal (list magit-gh--test-pr
                            (make-magit-gh-review :body "Super-great job"
-                                                 :comments nil
+                                                 :threads nil
                                                  :commit-sha "ghijkl"
                                                  :state 'comment))
                      (car mock-calls))))))
