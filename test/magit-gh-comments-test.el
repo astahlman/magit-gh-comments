@@ -425,8 +425,8 @@ With a carriage-return \\+ line-feed.\n+"))
 (ert-deftest magit-gh--test-add-pending-comments ()
   (magit-gh--discard-review-draft magit-gh--test-pr)
   (magit-gh--simulate-adding-comments magit-gh--test-comments)
-  (should (equal (mapcar #'car (magit-gh-review-threads
-                                (magit-gh--get-review-draft magit-gh--test-pr)))
+  (should (equal (magit-gh-review-comments
+                  (magit-gh--get-review-draft magit-gh--test-pr))
                  (reverse magit-gh--test-comments))))
 
 
