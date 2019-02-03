@@ -4,6 +4,7 @@
 (require 'json)
 (require 'request)
 (require 'magit-git)
+(require 'dash)
 
 ;; https://developer.github.com/v3/pulls/#list-pull-requests
 ;; TODO: Add title, body, and state (at a minimum)
@@ -29,6 +30,9 @@
   threads
   commit-sha
   state)
+
+(defun magit-gh-review-comments (review)
+  (-flatten (magit-gh-review-threads review)))
 
 (defun magit-gh-pr-to-string (pr)
   (format "%s#%s"
@@ -420,7 +424,7 @@ API reference: https://developer.github.com/v3/pulls/reviews/#example"
         (payload `((:commit_id . ,(magit-gh-review-commit-sha review))
                    (:body . ,(magit-gh-review-body review)))))
     (when-let ((comments (mapcar #'magit-gh-comment--to-github-format
-                                 (mapcar #'car (magit-gh-review-threads review)))))
+                                 (magit-gh-review-comments review))))
       (push `(:comments . ,comments) payload))
     (when-let ((event (and (not (equal 'pending (magit-gh-review-state review)))
                            (magit-gh-review-state review))))
