@@ -95,6 +95,11 @@
             number)))
 
 ;;;###autoload
+(defun magit-gh-reload-from-github ()
+  (interactive)
+  (let ((magit-gh--should-skip-cache t))
+    (magit-refresh-buffer)))
+
 (defun magit-gh-show-pr (&optional pr)
   (interactive)
   (let ((pr (or pr (magit-gh--capture-current-pull-request)))
@@ -471,7 +476,8 @@ If SECTION is not supplied, use the value of
 ;;;###autoload
 (defun magit-gh-reply-to-comment (id comment-text)
   "Reply to the comment with ID with COMMENT-TEXT"
-  (magit-gh--reply-to-comment (magit-gh--get-current-pr) id comment-text))
+  (magit-gh--reply-to-comment (magit-gh--get-current-pr) id comment-text)
+  (magit-gh-reload-from-github))
 
 ;;;###autoload
 (defun magit-gh-add-comment (arg comment-text)
