@@ -192,7 +192,7 @@ magit-gh-diff-pos POS in the section for FILE."
                         (magit-gh-diff-pos-hunk-start pos)))
              (file-section (car (magit-gh--filter-sections
                                  (lambda (sec) (and (magit-file-section-p sec)
-                                                    (string= (magit-section-value sec)
+                                                    (string= (oref sec value)
                                                              file))))))
              (target-in-hunk-p (lambda (hunk-header)
                                  (let ((start (alist-get (if (eq :a rev) :a-start :b-start)
