@@ -47,4 +47,19 @@ a function"
 ;; e.g.,
 ;; (magit-gh--map-tree (lambda (root) (oref root type)) fake-magit-root-section)
 
+(require 'cl-extra)
+
+(defun ht-print (_ht)
+  "Return the string representation of the given hashtable"
+  (interactive)
+  (cl-flet ((pprint (x)
+                    (with-temp-buffer
+                      (cl-prettyprint x)
+                      (buffer-substring (1+ (point-min))  ;; drop leading \n
+                                        (point-max)))))
+    (with-temp-buffer
+      (ht-aeach (insert (format "\t%s => %s\n" key (pprint value)))
+                _ht)
+      (buffer-string))))
+
 (provide 'magit-gh-comments-utils)

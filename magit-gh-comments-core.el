@@ -625,18 +625,19 @@ This function does not modify its input."
     result))
 
 (defun magit-gh--group-comments-by-thread (reviews)
-  (let ((comment-id->review (ht-create))
-        (comment-id->thread (ht-create)))
-    (dolist (review reviews comment-id->review)
-      ;; TODO: Known bug here - this discards pending comments (with
-      ;; id=nil) to avoid infinite recursion in the sort function
-      (dolist (comment (-remove (lambda (comment) (not (magit-gh-comment-id comment)))
-                                (magit-gh-review-comments review)))
-        (ht-set! comment-id->review
-                 (magit-gh-comment-id comment)
+  (let ((comment->review (ht-create))
+        (comment-id->thread (ht-create))
+        (num-pending-comments 0))
+    (dolist (review reviews comment->review)
+      (dolist (comment (magit-gh-review-comments review))
+        (ht-set! comment->review
+                 comment
                  review)
         (ht-set! comment-id->thread
-                 (magit-gh-comment-id comment)
+                 (or (magit-gh-comment-id comment)
+                     ;; pending comments can't possibly have a reply,
+                     ;; so just assign them some placeholder ID
+                     (make-symbol (format ":pending-%s" (incf num-pending-comments))))
                  (cons comment nil))))
     (ht-each
      (lambda (id thread)
@@ -668,8 +669,8 @@ This function does not modify its input."
                               comment<))))
          (let ((review->threads (ht-create)))
            (ht-each (lambda (comment-id thread)
-                      (let ((review (ht-get comment-id->review
-                                            comment-id)))
+                      (let ((review (ht-get comment->review
+                                            (car thread))))
                         (ht-set! review->threads
                                  review
                                  (cons thread (ht-get review->threads
@@ -681,6 +682,12 @@ This function does not modify its input."
                (ht-set! review->threads
                         review
                         nil)))))))
+
+(ert-deftest magit-gh--test-grouping-pending-comments ()
+  (let ((review (make-magit-gh-review :state 'pending
+                                      :comments (list
+                                                 (make-magit-gh-comment)))))
+    (magit-gh--group-comments-by-thread (list review))))
 
 (ert-deftest magit-gh--test-grouping-comments-into-threads ()
   (let* ((comment1 (make-magit-gh-comment :id 1))
