@@ -35,11 +35,6 @@ See also `magit-buffer-lock-functions'."
 (push (cons 'magit-pull-request-mode #'magit-gh-pull-request--lock-value)
       magit-buffer-lock-functions)
 
-(defun magit-pull-request-reload-from-github ()
-  (interactive)
-  (let ((magit-gh--should-skip-cache t))
-    (magit-refresh-buffer)))
-
 (defun magit-pull-request-refresh-buffer (pr &rest _refresh-args)
   ;; We'll need a reference to the PR in our magit-diff refresh hook
   (setq-local magit-gh--current-pr (magit-gh--hydrate-pr-from-github pr))
