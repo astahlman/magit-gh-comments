@@ -26,7 +26,7 @@ The start and end of the overlays are inclusive."
 
 (defun magit-gh--delete-overlays-at-point ()
   (interactive)
-  (dolist (ov (overlays-at-point))
+  (dolist (ov (magit-gh--overlays-at-point))
     (delete-overlay ov)))
 
 ;; TODO: This probably doesn't belong here
