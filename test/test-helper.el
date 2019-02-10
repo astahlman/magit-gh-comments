@@ -115,19 +115,23 @@ failures.
 Inspired by textwrap.dedent, in Python."
   (let ((margin (apply #'min
                        (mapcar (lambda (l)
-                                 (or (string-match "[^ ]+" l) 0))
+                                 (or (string-match "[^ ]+" l) 10000000))
                                (s-lines s)))))
     (s-join "\n"
-            (mapcar (lambda (l) (substring l margin))
+            (mapcar (lambda (l) (if (< margin (length l))
+                                    (substring l margin)
+                                  l))
                     (s-lines s)))))
 
 (ert-deftest magit-gh--test-s-dedent ()
   (should (equalp
 "foo
-bar"
+bar
+"
            (s-dedent "\
                      foo
-                     bar")))
+                     bar
+")))
   (should (equalp "\
  foo
   bar
