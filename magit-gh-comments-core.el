@@ -751,6 +751,21 @@ and value."
                   result))
       (setq i (1+ i)))))
 
+(defun magit-gh--max-width-region (start end)
+  (interactive "r")
+  (let ((lines (s-split "\n" (buffer-substring start end))))
+    (apply #'max (mapcar #'length lines))))
+
+(defun magit-gh--pad-region (start end width &optional filler-char)
+  (interactive "r\nnWidth: ")
+  (let ((lines (s-split "\n" (buffer-substring start end))))
+    (s-join "\n"
+            (mapcar (lambda (l)
+                      (s-pad-right width
+                                   (char-to-string (or filler-char ?\s))
+                                   l))
+                    lines))))
+
 (defun magit-gh--comment-ctx (diff-body gh-pos file)
   (letfn ((walk-within-hunk (lambda (n)
                               "Walk N lines, stopping at hunk headers"
@@ -761,20 +776,76 @@ and value."
                                 (forward-line (/ n (abs n)))
                                 (setq n (- n (/ n (abs n))))))))
     (save-excursion
-      (magit-gh--with-temp-buffer
-        (insert diff-body)
+      (let* ((padded-diff (with-temp-buffer
+                            (insert diff-body)
+                            ;; TOOD: the diff often gets condensed
+                            ;; when it's painted, so this looks too
+                            ;; wide. We should probably use the width
+                            ;; of the *painted* diff instead
+                            (let ((max-width (magit-gh--max-width-region
+                                              (point-min)
+                                              (point-max))))
+                              (magit-gh--pad-region (point-min)
+                                                    (point-max)
+                                                    max-width))))
+             (painted-padded-diff (with-temp-buffer
+                                    (insert padded-diff)
+                                    (goto-char (point-min))
+                                    (magit-gh--paint-diff)
+                                    (goto-char (point-min))
+                                    ;; strip text properties from the
+                                    ;; \n characters so that the "margins" aren't painted
+                                    (s-join "\n"
+                                            (s-split "\n" (buffer-string))))))
+        (magit-gh--with-temp-buffer
+          (insert painted-padded-diff)
+          (goto-char (point-min))
+          (magit-gh--jump-to-file-in-diff file)
+          (re-search-forward magit-gh--hunk-header-re)
+          (forward-line gh-pos)
+          (let* ((num-lines-ctx-before 3)
+                 (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
+                                      (point)))
+                 (end (point-at-eol)))
+            (format "%s\n%s" file (buffer-substring beg end))))))))
+
+(ert-deftest test-magit-gh--format-diff-ctx ()
+  (cl-flet* ((this-line () (buffer-substring (point-at-bol) (point-at-eol)))
+             (text-with-face (face text) (propertize text 'face face))
+             (assert-highlighted
+              (face text)
+              (and
+               (should (equal-including-properties
+                        (s-trim-right (this-line))
+                        (text-with-face face text)))
+               (should-not (get-text-property (point-at-eol) 'face)))))
+    (let ((diff-body (s-dedent "\
+                        diff --git a/magit-gh-comments-utils.el b/magit-gh-comments-utils.el
+                        index f3841f0..ea223f7 100644
+                        --- a/magit-gh-comments-utils.el
+                        +++ b/magit-gh-comments-utils.el
+                        @@ -26,7 +26,7 @@ The start and end of the overlays are inclusive.\"
+                        
+                        (defun magit-gh--delete-overlays-at-point ()
+                        (interactive)
+                        -  (dolist (ov (overlays-at-point))
+                        +  (dolist (ov (magit-gh--overlays-at-point))
+                        +  some other line
+                            (delete-overlay ov)))
+                        
+                        ;; TODO: This probably doesn't belong here
+")))
+      (with-current-buffer (get-buffer-create "diff-test")
+        (delete-region (point-min) (point-max))
+        (insert (magit-gh--comment-ctx diff-body 6 "magit-gh-comments-utils.el"))
         (goto-char (point-min))
-        (magit-gh--paint-diff)
-        (goto-char (point-min))
-        (magit-gh--jump-to-file-in-diff file)
-        (re-search-forward magit-gh--hunk-header-re)
-        (forward-line gh-pos)
-        (let* ((num-lines-ctx-before 3)
-               (beg (save-excursion (walk-within-hunk (* -1 num-lines-ctx-before))
-                                    (point)))
-               (end (save-excursion (end-of-line)
-                                    (point))))
-          (format "%s\n%s" file (buffer-substring beg end)))))))
+        (should (magit-gh--looking-at-p "^magit-gh-comments-utils.el$"))
+        (should (= 0 (forward-line 2)))
+        (assert-highlighted 'magit-diff-removed "-  (dolist (ov (overlays-at-point))")
+        (should (= 0 (forward-line 1)))
+        (assert-highlighted 'magit-diff-added "+  (dolist (ov (magit-gh--overlays-at-point))")
+        (should (= 0 (forward-line 1)))
+        (assert-highlighted 'magit-diff-added "+  some other line")))))
 
 ;; Review drafts
 
